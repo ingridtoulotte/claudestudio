@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ClaudeStudio local state
+*.db
+*.db-wal
+*.db-shm
+.claudestudio/
+
+# scratch & generated wrappers
+_scratch/
+docs/_hero.html
+
+# OS
+.DS_Store
+Thumbs.db

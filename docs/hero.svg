@@ -1,0 +1,62 @@
+<svg width="1280" height="440" viewBox="0 0 1280 440" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="440" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0c0e14"/><stop offset="1" stop-color="#07080c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1010 120) rotate(140) scale(520)">
+      <stop stop-color="#ff8a5b" stop-opacity="0.30"/><stop offset="1" stop-color="#ff8a5b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(120 440) rotate(-60) scale(460)">
+      <stop stop-color="#6074b4" stop-opacity="0.18"/><stop offset="1" stop-color="#6074b4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FF8A5B"/><stop offset="1" stop-color="#E0664A"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#ffffff"/><stop offset="1" stop-color="#ffd9c8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="440" rx="22" fill="url(#bg)"/>
+  <rect width="1280" height="440" rx="22" fill="url(#glow)"/>
+  <rect width="1280" height="440" rx="22" fill="url(#glow2)"/>
+  <rect x="0.5" y="0.5" width="1279" height="439" rx="21.5" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
+
+  <!-- logo tile -->
+  <g transform="translate(80,86)">
+    <rect width="64" height="64" rx="16" fill="url(#tile)"/>
+    <rect x="15" y="18" width="22" height="5" rx="2.5" fill="white" fill-opacity="0.95"/>
+    <rect x="15" y="29.5" width="34" height="5" rx="2.5" fill="white" fill-opacity="0.78"/>
+    <rect x="15" y="41" width="16" height="5" rx="2.5" fill="white" fill-opacity="0.6"/>
+    <circle cx="44" cy="43.5" r="9" fill="white"/>
+    <path d="M41.4 39.4l6.4 4.1-6.4 4.1z" fill="#E0664A"/>
+  </g>
+
+  <text x="166" y="118" fill="#8b909e" font-size="15" letter-spacing="3" font-weight="600">CLAUDESTUDIO</text>
+  <text x="78" y="210" fill="url(#word)" font-size="64" font-weight="800" letter-spacing="-2">The desktop app</text>
+  <text x="78" y="282" fill="#ff8a5b" font-size="64" font-weight="800" letter-spacing="-2">Claude Code deserves.</text>
+  <text x="80" y="332" fill="#aab0be" font-size="20" font-weight="450">Explore · Search · Replay · Understand — every session, on your machine.</text>
+
+  <!-- trust pills -->
+  <g transform="translate(80,366)" font-size="13" font-weight="600">
+    <g><rect width="132" height="30" rx="15" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/><text x="16" y="20" fill="#aab0be">⚡ Zero-dependency</text></g>
+    <g transform="translate(144,0)"><rect width="118" height="30" rx="15" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/><text x="16" y="20" fill="#aab0be">🔒 100% local</text></g>
+    <g transform="translate(274,0)"><rect width="138" height="30" rx="15" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/><text x="16" y="20" fill="#aab0be">🪟 Win · macOS · Linux</text></g>
+  </g>
+
+  <!-- decorative stacked session cards -->
+  <g transform="translate(880,92)" opacity="0.96">
+    <g transform="translate(40,16)"><rect width="300" height="68" rx="14" fill="#13151d" stroke="#ffffff" stroke-opacity="0.07"/>
+      <rect x="18" y="18" width="150" height="9" rx="4.5" fill="#aab0be" fill-opacity="0.55"/>
+      <rect x="18" y="38" width="90" height="7" rx="3.5" fill="#6f7585" fill-opacity="0.6"/>
+      <circle cx="266" cy="34" r="4" fill="#6aa6ff"/><rect x="200" y="30" width="40" height="8" rx="4" fill="#ff8a5b" fill-opacity="0.7"/></g>
+    <g transform="translate(20,98)"><rect width="320" height="68" rx="14" fill="#161922" stroke="#ffffff" stroke-opacity="0.09"/>
+      <rect x="18" y="18" width="190" height="9" rx="4.5" fill="#e8eaf0" fill-opacity="0.85"/>
+      <rect x="18" y="38" width="120" height="7" rx="3.5" fill="#6f7585" fill-opacity="0.7"/>
+      <circle cx="286" cy="34" r="4" fill="#5ec98a"/><rect x="210" y="30" width="48" height="8" rx="4" fill="#ff8a5b"/></g>
+    <g transform="translate(0,180)"><rect width="300" height="68" rx="14" fill="#13151d" stroke="#ffffff" stroke-opacity="0.07"/>
+      <rect x="18" y="18" width="130" height="9" rx="4.5" fill="#aab0be" fill-opacity="0.5"/>
+      <rect x="18" y="38" width="80" height="7" rx="3.5" fill="#6f7585" fill-opacity="0.55"/>
+      <circle cx="266" cy="34" r="4" fill="#9a8cff"/><rect x="200" y="30" width="40" height="8" rx="4" fill="#ff8a5b" fill-opacity="0.6"/></g>
+  </g>
+</svg>

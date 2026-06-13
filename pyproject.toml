@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claudestudio"
+version = "0.1.0"
+description = "The desktop workspace for Claude Code — explore, search, replay and understand every session, locally."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ingrid Toulotte" }]
+keywords = ["claude", "claude-code", "anthropic", "llm", "developer-tools", "local-first", "analytics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Utilities",
+]
+dependencies = []  # zero — standard library only
+
+[project.urls]
+Homepage = "https://github.com/ingridtoulotte/claudestudio"
+Repository = "https://github.com/ingridtoulotte/claudestudio"
+Issues = "https://github.com/ingridtoulotte/claudestudio/issues"
+
+[project.scripts]
+claudestudio = "claudestudio.cli:main"
+
+[tool.setuptools]
+packages = ["claudestudio"]
+
+# The web/ assets ship with the repository; ClaudeStudio is designed to be run
+# from a clone (`python -m claudestudio`) with zero install and zero deps.

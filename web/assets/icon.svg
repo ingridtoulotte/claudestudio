@@ -1,0 +1,17 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF8A5B"/>
+      <stop offset="1" stop-color="#E0664A"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="url(#g)"/>
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="black" fill-opacity="0" stroke="white" stroke-opacity="0.10" stroke-width="1.5"/>
+  <!-- stacked session bars -->
+  <rect x="15" y="18" width="22" height="5" rx="2.5" fill="white" fill-opacity="0.95"/>
+  <rect x="15" y="29.5" width="34" height="5" rx="2.5" fill="white" fill-opacity="0.78"/>
+  <rect x="15" y="41" width="16" height="5" rx="2.5" fill="white" fill-opacity="0.6"/>
+  <!-- play / replay node -->
+  <circle cx="44" cy="43.5" r="9" fill="white"/>
+  <path d="M41.4 39.4l6.4 4.1-6.4 4.1z" fill="#E0664A"/>
+</svg>

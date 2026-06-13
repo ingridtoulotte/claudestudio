@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    name: selftest (${{ matrix.os }} · py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run self-test (zero dependencies)
+        run: python -m claudestudio --selftest
+
+      - name: Smoke test — build demo index
+        run: python -m claudestudio demo --count 8
+
+      - name: Smoke test — API layer boots & serves
+        shell: bash
+        run: |
+          python - <<'PY'
+          import io, json, urllib.request, threading, time, os, tempfile
+          from claudestudio import index, fixtures, server
+          tmp = tempfile.mkdtemp()
+          root = os.path.join(tmp, "p"); os.makedirs(root)
+          fixtures.build_corpus(root, count=6, seed=1)
+          db = os.path.join(tmp, "i.db")
+          conn = index.connect(db); index.reindex(conn, root); conn.close()
+          httpd = server.make_server(db, root, "127.0.0.1", 8911)
+          t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
+          time.sleep(0.5)
+          for path in ("/api/summary", "/api/sessions", "/api/analytics", "/api/wrapped", "/api/search?q=async"):
+              with urllib.request.urlopen("http://127.0.0.1:8911" + path) as r:
+                  assert r.status == 200, path
+                  json.loads(r.read())
+          # static SPA serves
+          with urllib.request.urlopen("http://127.0.0.1:8911/") as r:
+              assert r.status == 200 and b"ClaudeStudio" in r.read()
+          httpd.shutdown()
+          print("API smoke OK")
+          PY

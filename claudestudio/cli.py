@@ -116,6 +116,9 @@ def cmd_demo(args):
     demo_db = os.path.join(os.path.dirname(index.default_db_path()), "demo.db")
     print(BANNER)
     print(f"  generating {args.count} synthetic sessions…")
+    # start clean so --count is exact and stale fixtures don't accumulate
+    import shutil
+    shutil.rmtree(demo_root, ignore_errors=True)
     fixtures.build_corpus(demo_root, count=args.count, seed=args.seed)
     # fresh db each time
     if os.path.exists(demo_db):

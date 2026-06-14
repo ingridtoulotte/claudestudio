@@ -13,8 +13,16 @@ Explore, search, replay, and understand every Claude Code session — all on you
 ![Local-first](https://img.shields.io/badge/data-100%25%20local-ff8a5b)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-9a8cff)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+[![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
+[![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
-[Quickstart](#-quickstart) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [How it works](#-how-it-works) · [CLI](#-cli) · [Privacy](#-privacy--trust)
+[Quickstart](#-quickstart) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [How it works](#-how-it-works) · [CLI](#-cli) · [Privacy](#-privacy--trust) · [FAQ](#-faq)
+
+<br/>
+
+<img src="docs/demo.svg" alt="ClaudeStudio replaying a Claude Code session — prompt, thinking, edit, test, and result unfolding on a scrubable timeline" width="100%" />
+
+<sub><i>Replay any session like a movie — prompt → thinking → tool calls → result, on a scrubable timeline.</i></sub>
 
 </div>
 
@@ -212,6 +220,52 @@ Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md).
 
 ---
 
+## ❓ FAQ
+
+<details>
+<summary><b>Does any of my data leave my machine?</b></summary>
+
+No. ClaudeStudio reads `~/.claude/projects` locally, builds a SQLite index on disk, and serves the UI from `127.0.0.1`. There are zero outbound network calls — `grep -r http claudestudio/` and see for yourself.
+</details>
+
+<details>
+<summary><b>Do I need to install anything (pip, npm, Rust, Electron)?</b></summary>
+
+No. It's pure Python standard library. If you can run Claude Code, you already have everything: `git clone`, then `python -m claudestudio`. No `pip install`, no `node_modules`, no build step.
+</details>
+
+<details>
+<summary><b>Will it touch or modify my session files?</b></summary>
+
+Never. ClaudeStudio only **reads** your `.jsonl` files. Everything it generates (the index, your favorites/archive/tags) lives in a separate file at `~/.claudestudio/index.db`. Delete it anytime and rebuild in seconds.
+</details>
+
+<details>
+<summary><b>How accurate is the cost estimate?</b></summary>
+
+It's deterministic, not a guess. Token counts come straight from your session logs and are multiplied by public Anthropic prices (with cache writes and cache reads priced separately). The price table lives in one editable file — [`pricing.py`](claudestudio/pricing.py) — and `--selftest` asserts the math exactly. Models with no published price are **flagged**, never silently estimated.
+</details>
+
+<details>
+<summary><b>How fast is it on a large history?</b></summary>
+
+Built for it. The index is denormalized for the common queries and backed by SQLite FTS5/BM25, so listing and search stay instant across thousands of sessions and millions of messages. Re-indexing is incremental — unchanged files are skipped by `(mtime, size)`.
+</details>
+
+<details>
+<summary><b>I just want to see it without exposing my own data.</b></summary>
+
+Run `python -m claudestudio demo --serve`. It generates a realistic, fully synthetic corpus and opens the full app against it — your real sessions are never read.
+</details>
+
+<details>
+<summary><b>Search says "degraded" — what's wrong?</b></summary>
+
+Your Python was built without SQLite FTS5 (rare, but happens on some minimal builds). Run `python -m claudestudio doctor` to confirm. Everything else works; only full-text ranking is affected.
+</details>
+
+---
+
 ## 🤝 Contributing
 
 ```bash
@@ -225,6 +279,16 @@ No dependencies to install, no build step to learn. See [CONTRIBUTING.md](CONTRI
 
 [MIT](LICENSE) © ClaudeStudio contributors
 
+---
+
 <div align="center">
-<sub>Built for the Claude Code community. Your history deserves a home.</sub>
+
+### Your Claude Code history deserves a home.
+
+If ClaudeStudio gave your sessions a place to live, **drop a ⭐** — it's the single biggest thing that helps other developers find it.
+
+[![Star on GitHub](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=for-the-badge&logo=github&label=Star%20this%20repo&color=9a8cff)](https://github.com/ingridtoulotte/claudestudio/stargazers)
+
+<sub>Built for the Claude Code community · 100% local · zero dependencies</sub>
+
 </div>

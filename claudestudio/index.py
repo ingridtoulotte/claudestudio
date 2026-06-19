@@ -125,6 +125,16 @@ CREATE TABLE IF NOT EXISTS user_state (
     tags       TEXT DEFAULT '[]',
     notes      TEXT DEFAULT ''
 );
+
+-- saved searches / smart collections — user-owned, survives reindexing
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT,
+    query      TEXT DEFAULT '',
+    sort       TEXT DEFAULT 'recent',
+    filters    TEXT DEFAULT '{}',
+    created_at REAL
+);
 """
 
 

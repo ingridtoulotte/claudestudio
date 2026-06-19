@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, index, parser as _parser, server, wrapped, fixtures, selftest
+from . import __version__, api, index, parser as _parser, server, wrapped, fixtures, selftest
 
 BANNER = r"""
    ___ _                _      ___ _            _ _
@@ -69,6 +69,24 @@ def cmd_wrapped(args):
     data = wrapped.generate(conn, args.year)
     wrapped.print_text(data)
     conn.close()
+    return 0
+
+
+def cmd_export(args):
+    conn = index.connect(args.db)
+    out = api.export_session(conn, args.session_id, args.format)
+    conn.close()
+    if out is None:
+        print(f"  No session with id {args.session_id!r} in the index.")
+        print("  Tip: run `claudestudio index` first, or copy an id from `serve`.")
+        return 1
+    if args.out == "-":
+        sys.stdout.write(out["text"])
+        return 0
+    dest = args.out or out["filename"]
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(out["text"])
+    print(f"  exported → {dest}  ({len(out['text']):,} bytes)")
     return 0
 
 
@@ -165,6 +183,13 @@ def build_parser():
     _add_common(p)
     p.add_argument("--year", type=int, default=None)
     p.set_defaults(func=cmd_wrapped)
+
+    p = sub.add_parser("export", help="export a session to Markdown or standalone HTML")
+    _add_common(p)
+    p.add_argument("session_id", help="session id (see `serve` or `index`)")
+    p.add_argument("--format", choices=["md", "markdown", "html"], default="md")
+    p.add_argument("--out", default=None, help="output file ('-' for stdout)")
+    p.set_defaults(func=cmd_export)
 
     p = sub.add_parser("doctor", help="diagnose environment & index health")
     _add_common(p)

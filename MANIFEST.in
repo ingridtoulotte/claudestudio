@@ -1,0 +1,3 @@
+recursive-include claudestudio/web *
+include LICENSE README.md
+include docs/FORMAT.md

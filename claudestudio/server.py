@@ -20,14 +20,14 @@ def _resolve_web_dir():
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.environ.get("CLAUDESTUDIO_WEB", ""),
-        os.path.join(os.path.dirname(here), "web"),  # repo-root/web (run from clone)
-        os.path.join(here, "web"),                   # packaged inside the package
+        os.path.join(here, "web"),                   # packaged inside the package (ships in the wheel)
+        os.path.join(os.path.dirname(here), "web"),  # legacy repo-root/web layout
         os.path.join(os.getcwd(), "web"),
     ]
     for c in candidates:
         if c and os.path.isdir(c):
             return c
-    return os.path.join(os.path.dirname(here), "web")
+    return os.path.join(here, "web")
 
 
 WEB_DIR = _resolve_web_dir()
@@ -75,6 +75,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_download(self, text, content_type, filename, status=200):
+        data = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _read_body(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         if not length:
@@ -103,12 +113,29 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/reindex":
                     stats = index.reindex(conn, self.projects_root, force=body.get("force", False))
                     return self._send_json(stats)
+                if path == "/api/saved":
+                    return self._send_json(api.add_saved(conn, body))
                 if path.startswith("/api/state/"):
                     sid = path[len("/api/state/"):]
                     return self._send_json(api.set_state(conn, sid, body))
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001 - surface as JSON, never 500-crash
+            return self._send_json({"error": str(exc)}, status=500)
+        return self._send_json({"error": "not found"}, status=404)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            conn = self._conn()
+            try:
+                if path.startswith("/api/saved/"):
+                    sid = path[len("/api/saved/"):]
+                    return self._send_json(api.delete_saved(conn, sid))
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
 
@@ -131,6 +158,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.wrapped_payload(conn, int(year) if year else None))
                 if path == "/api/compare":
                     return self._send_json(api.compare(conn, params.get("a", ""), params.get("b", "")))
+                if path == "/api/saved":
+                    return self._send_json({"saved": api.list_saved(conn)})
+                if path.startswith("/api/session/") and "/export" in path:
+                    rest = path[len("/api/session/"):]
+                    sid, _, suffix = rest.partition("/export")
+                    fmt = suffix.lstrip(".") or params.get("format", "md")
+                    out = api.export_session(conn, sid, fmt)
+                    if out is None:
+                        return self._send_json({"error": "not found"}, status=404)
+                    return self._send_download(out["text"], out["content_type"], out["filename"])
                 if path.startswith("/api/session/"):
                     sid = path[len("/api/session/"):]
                     data = api.get_session(conn, sid)

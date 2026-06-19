@@ -8,9 +8,11 @@ module is what the tests exercise directly.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import time
 
-from . import analytics, wrapped, index
+from . import analytics, export, wrapped, index
 
 SORT_COLUMNS = {
     "recent": "last_epoch",
@@ -233,6 +235,70 @@ def get_session_summary(conn, session_id: str) -> dict | None:
         )
     ]
     return d
+
+
+# ---------------------------------------------------------------------------
+# saved searches / smart collections
+# ---------------------------------------------------------------------------
+
+def _row_to_saved(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    try:
+        d["filters"] = json.loads(d.get("filters") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        d["filters"] = {}
+    return d
+
+
+def list_saved(conn) -> list:
+    rows = conn.execute(
+        "SELECT id,name,query,sort,filters,created_at FROM saved_searches "
+        "ORDER BY created_at DESC, id DESC"
+    ).fetchall()
+    return [_row_to_saved(r) for r in rows]
+
+
+def add_saved(conn, body: dict) -> dict:
+    name = (str(body.get("name") or "")).strip() or "Untitled search"
+    query = str(body.get("query") or "")
+    sort = str(body.get("sort") or "recent")
+    filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    cur = conn.execute(
+        "INSERT INTO saved_searches(name,query,sort,filters,created_at) VALUES(?,?,?,?,?)",
+        (name, query, sort, json.dumps(filters), time.time()),
+    )
+    conn.commit()
+    return {"id": cur.lastrowid, "name": name, "query": query,
+            "sort": sort, "filters": filters}
+
+
+def delete_saved(conn, saved_id) -> dict:
+    try:
+        sid = int(saved_id)
+    except (TypeError, ValueError):
+        return {"deleted": False, "id": saved_id}
+    conn.execute("DELETE FROM saved_searches WHERE id=?", (sid,))
+    conn.commit()
+    return {"deleted": True, "id": sid}
+
+
+def _slug(text: str, fallback: str = "session") -> str:
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "").strip().lower()).strip("-")
+    return (s[:60] or fallback)
+
+
+def export_session(conn, session_id: str, fmt: str) -> dict | None:
+    """Render a full session as Markdown or standalone HTML.
+
+    Returns {text, content_type, filename} or None if the session is unknown.
+    """
+    detail = get_session(conn, session_id)
+    if detail is None:
+        return None
+    text, content_type = export.render(detail, fmt)
+    ext = "html" if content_type.startswith("text/html") else "md"
+    filename = f"{_slug(detail.get('title'), session_id[:8] or 'session')}.{ext}"
+    return {"text": text, "content_type": content_type, "filename": filename}
 
 
 def _fts_query(q: str) -> str:

@@ -43,13 +43,19 @@ jobs:
           httpd = server.make_server(db, root, "127.0.0.1", 8911)
           t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
           time.sleep(0.5)
-          for path in ("/api/summary", "/api/sessions", "/api/analytics", "/api/wrapped", "/api/search?q=async"):
-              with urllib.request.urlopen("http://127.0.0.1:8911" + path) as r:
+          B = "http://127.0.0.1:8911"
+          for path in ("/api/summary", "/api/sessions", "/api/analytics", "/api/wrapped", "/api/search?q=async", "/api/saved"):
+              with urllib.request.urlopen(B + path) as r:
                   assert r.status == 200, path
                   json.loads(r.read())
-          # static SPA serves
-          with urllib.request.urlopen("http://127.0.0.1:8911/") as r:
+          # static SPA serves (web/ ships inside the package)
+          with urllib.request.urlopen(B + "/") as r:
               assert r.status == 200 and b"ClaudeStudio" in r.read()
+          # export a real session to markdown + standalone html
+          sid = json.loads(urllib.request.urlopen(B + "/api/sessions?limit=1").read())["sessions"][0]["session_id"]
+          for ext in ("md", "html"):
+              with urllib.request.urlopen(B + "/api/session/" + sid + "/export." + ext) as r:
+                  assert r.status == 200 and len(r.read()) > 50, ext
           httpd.shutdown()
           print("API smoke OK")
           PY

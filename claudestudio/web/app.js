@@ -91,7 +91,19 @@ const API = {
   compare: (a, b) => API.get('/api/compare?' + new URLSearchParams({ a, b })),
   state: (id, patch) => API.post('/api/state/' + encodeURIComponent(id), patch),
   reindex: () => API.post('/api/reindex', {}),
+  exportUrl: (id, fmt) => '/api/session/' + encodeURIComponent(id) + '/export.' + fmt,
+  saved: () => API.get('/api/saved'),
+  addSaved: (b) => API.post('/api/saved', b),
+  delSaved: (id) => fetch('/api/saved/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
 };
+
+// trigger a browser download from a server endpoint that sets Content-Disposition
+function downloadFrom(url) {
+  const a = el('a', { href: url, download: '' });
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 0);
+}
 
 // ---- charts (hand-rolled SVG) ---------------------------------------------
 function areaChart(series, { w = 600, h = 180, color = 'var(--accent)', key = 'value' } = {}) {
@@ -243,11 +255,45 @@ async function viewSessions(params) {
   const sortSel = el('select', { class: 'input' }, SORTS.map(([v, l]) => el('option', { value: v, text: l, ...(v === sessionsState.sort ? { selected: 'selected' } : {}) })));
   const favChip = el('button', { class: 'chip toggle' + (sessionsState.favorite ? ' on' : '') }, ['★ Favorites']);
   const archChip = el('button', { class: 'chip toggle' + (sessionsState.archived === 'only' ? ' on' : '') }, ['Archived']);
+  const saveBtn = el('button', { class: 'chip toggle', title: 'Save this filter as a smart collection' }, ['＋ Save search']);
 
-  const toolbar = el('div', { class: 'toolbar' }, [searchBox, sortSel, favChip, archChip]);
+  const toolbar = el('div', { class: 'toolbar' }, [searchBox, sortSel, favChip, archChip, saveBtn]);
   root.appendChild(toolbar);
+  const savedWrap = el('div', { class: 'saved-row' });
+  root.appendChild(savedWrap);
   const listWrap = el('div', {});
   root.appendChild(listWrap);
+
+  async function loadSaved() {
+    savedWrap.innerHTML = '';
+    let items = [];
+    try { items = (await API.saved()).saved || []; } catch { return; }
+    items.forEach((it) => {
+      savedWrap.appendChild(el('span', { class: 'saved-chip' }, [
+        el('span', { class: 'lbl', text: it.name, title: 'Apply saved search', onclick: () => applySaved(it) }),
+        el('button', { class: 'x', title: 'Delete', onclick: async (e) => { e.stopPropagation(); await API.delSaved(it.id); toast('Deleted'); loadSaved(); } }, ['×']),
+      ]));
+    });
+  }
+  function applySaved(it) {
+    const f = it.filters || {};
+    sessionsState.q = it.query || '';
+    sessionsState.sort = it.sort || 'recent';
+    sessionsState.favorite = !!f.favorite;
+    sessionsState.archived = f.archived || 'exclude';
+    if (f.project) sessionsState.project = f.project; else delete sessionsState.project;
+    sessionsState.offset = 0;
+    viewSessions({});
+  }
+  saveBtn.addEventListener('click', async () => {
+    const name = prompt('Name this saved search:', sessionsState.q || sessionsState.project || 'My search');
+    if (!name) return;
+    const filters = { favorite: sessionsState.favorite, archived: sessionsState.archived };
+    if (sessionsState.project) filters.project = sessionsState.project;
+    try { await API.addSaved({ name: name.trim(), query: sessionsState.q, sort: sessionsState.sort, filters }); toast('Search saved'); loadSaved(); }
+    catch (e) { toast('Save failed: ' + e.message, 'err'); }
+  });
+  loadSaved();
 
   let timer;
   $('input', searchBox).addEventListener('input', (e) => { clearTimeout(timer); sessionsState.q = e.target.value; sessionsState.offset = 0; timer = setTimeout(load, 200); });
@@ -322,9 +368,12 @@ async function viewSession(id) {
   const star = el('button', { class: 'iconbtn' + (s.favorite ? ' on' : ''), title: 'Favorite', html: s.favorite ? '★' : '☆', onclick: async () => { const r = await API.state(id, { favorite: !s.favorite }); s.favorite = r.favorite; star.classList.toggle('on', r.favorite); star.innerHTML = r.favorite ? '★' : '☆'; toast(r.favorite ? 'Favorited' : 'Unfavorited'); } });
   const arch = el('button', { class: 'iconbtn' + (s.archived ? ' on' : ''), title: 'Archive', html: '🗄', onclick: async () => { const r = await API.state(id, { archived: !s.archived }); s.archived = r.archived; arch.classList.toggle('on', r.archived); toast(r.archived ? 'Archived' : 'Unarchived'); } });
 
+  const expMd = el('button', { class: 'btn-ghost', title: 'Export to Markdown', onclick: () => { downloadFrom(API.exportUrl(id, 'md')); toast('Exported Markdown'); } }, ['⬇ .md']);
+  const expHtml = el('button', { class: 'btn-ghost', title: 'Export to a standalone, shareable HTML file', onclick: () => { downloadFrom(API.exportUrl(id, 'html')); toast('Exported HTML'); } }, ['⬇ .html']);
+
   root.appendChild(el('div', { class: 'page-head' }, [
     el('a', { href: '#/sessions', class: 'btn-ghost', html: '← Sessions' }),
-    el('div', { class: 'page-actions' }, [star, arch]),
+    el('div', { class: 'page-actions' }, [expMd, expHtml, star, arch]),
   ]));
 
   const modelChips = (s.models || []).map((m) => { const f = family(m); return el('span', { class: `chip model-chip fam-${f}` }, [el('span', { class: 'dot' }), shortModel(m)]); });
@@ -673,6 +722,7 @@ async function viewWrapped(params) {
   const nav = el('div', { class: 'wrap-nav' }, [
     el('button', { text: '← Back', onclick: () => show(cur - 1) }),
     el('button', { text: 'Copy summary', onclick: () => { const txt = `My Claude Code — ${data.label}\n` + data.cards.map((c) => `${c.icon} ${c.value} — ${c.label}`).join('\n'); navigator.clipboard?.writeText(txt).then(() => toast('Summary copied')); } }),
+    el('button', { text: '⬇ Save card', title: 'Download a shareable PNG', onclick: () => saveWrappedCard(data) }),
     el('button', { text: 'Next →', onclick: () => show(cur + 1) }),
   ]);
   wrap.append(stage, dots, nav);
@@ -680,6 +730,81 @@ async function viewWrapped(params) {
   view().innerHTML = ''; view().appendChild(root);
   let auto = setInterval(() => show(cur + 1), 4200);
   stage.addEventListener('click', () => { clearInterval(auto); show(cur + 1); });
+}
+
+// render the Wrapped highlights to a shareable PNG (pure canvas, no deps)
+function saveWrappedCard(data) {
+  const W = 1080, H = 1350, FONT = "'Segoe UI', system-ui, -apple-system, Roboto, sans-serif";
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const x = cv.getContext('2d');
+
+  const bg = x.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#16131b'); bg.addColorStop(1, '#0d0e12');
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  const glow = x.createRadialGradient(W / 2, 220, 30, W / 2, 220, 680);
+  glow.addColorStop(0, 'rgba(255,138,91,0.22)'); glow.addColorStop(1, 'rgba(255,138,91,0)');
+  x.fillStyle = glow; x.fillRect(0, 0, W, H);
+
+  x.textAlign = 'center';
+  x.fillStyle = '#ff8a5b';
+  x.font = '700 38px ' + FONT;
+  x.fillText('✦  CLAUDE WRAPPED', W / 2, 150);
+  x.fillStyle = '#e7e9ee';
+  x.font = '800 78px ' + FONT;
+  x.fillText(String(data.label || 'All time'), W / 2, 248);
+
+  const rr = (px, py, pw, ph, r) => {
+    x.beginPath();
+    x.moveTo(px + r, py);
+    x.arcTo(px + pw, py, px + pw, py + ph, r);
+    x.arcTo(px + pw, py + ph, px, py + ph, r);
+    x.arcTo(px, py + ph, px, py, r);
+    x.arcTo(px, py, px + pw, py, r);
+    x.closePath();
+  };
+
+  const picks = (data.cards || []).slice(0, 6);
+  const M = 60, GAP = 36, COLS = 2;
+  const cw = (W - M * 2 - GAP * (COLS - 1)) / COLS;
+  const ch = 250, top = 330;
+  picks.forEach((c, i) => {
+    const col = i % COLS, row = (i / COLS) | 0;
+    const px = M + col * (cw + GAP), py = top + row * (ch + GAP);
+    rr(px, py, cw, ch, 26);
+    x.fillStyle = 'rgba(255,255,255,0.035)'; x.fill();
+    x.lineWidth = 1.5; x.strokeStyle = 'rgba(255,255,255,0.07)'; x.stroke();
+    x.textAlign = 'center';
+    x.font = '38px ' + FONT;
+    x.fillStyle = '#fff';
+    x.fillText(String(c.icon || ''), px + cw / 2, py + 78);
+    x.fillStyle = '#e7e9ee';
+    let v = String(c.value || ''); x.font = '800 56px ' + FONT;
+    while (x.measureText(v).width > cw - 48 && v.length > 6) { v = v.slice(0, -2) + '…'; }
+    x.fillText(v, px + cw / 2, py + 150);
+    x.fillStyle = '#aab0bd';
+    x.font = '500 24px ' + FONT;
+    let lab = String(c.label || '');
+    while (x.measureText(lab).width > cw - 40 && lab.length > 6) { lab = lab.slice(0, -2) + '…'; }
+    x.fillText(lab, px + cw / 2, py + 196);
+  });
+
+  x.textAlign = 'center';
+  x.fillStyle = '#9a8cff';
+  x.font = '700 30px ' + FONT;
+  x.fillText('ClaudeStudio', W / 2, H - 86);
+  x.fillStyle = '#727887';
+  x.font = '400 22px ' + FONT;
+  x.fillText('the desktop workspace for Claude Code · 100% local', W / 2, H - 48);
+
+  cv.toBlob((blob) => {
+    if (!blob) { toast('Could not render card', 'err'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: `claude-wrapped-${String(data.label || 'alltime').replace(/\s+/g, '-').toLowerCase()}.png` });
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
+    toast('Saved Wrapped card');
+  }, 'image/png');
 }
 
 // ---- view: search (full page) ---------------------------------------------

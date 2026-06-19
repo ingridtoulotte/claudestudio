@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.1.0"
+version = "0.2.0"
 description = "The desktop workspace for Claude Code — explore, search, replay and understand every session, locally."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -32,6 +32,9 @@ claudestudio = "claudestudio.cli:main"
 
 [tool.setuptools]
 packages = ["claudestudio"]
+include-package-data = true
 
-# The web/ assets ship with the repository; ClaudeStudio is designed to be run
-# from a clone (`python -m claudestudio`) with zero install and zero deps.
+# The web/ assets live inside the package so they ship in the wheel — this is
+# what lets `pipx run --spec git+…/claudestudio claudestudio` work with no clone.
+[tool.setuptools.package-data]
+claudestudio = ["web/**/*", "web/*", "web/assets/*"]

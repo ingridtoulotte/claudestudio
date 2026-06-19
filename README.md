@@ -48,6 +48,14 @@ ClaudeStudio is that workspace — a fast, local, beautiful home for everything 
 
 ClaudeStudio is **pure Python standard library** — no `pip install`, no `node_modules`, no build step. If you have Python 3.9+, you can run it.
 
+**Try it in one command — no clone, no install** (needs [`pipx`](https://pipx.pypa.io)):
+
+```bash
+pipx run --spec git+https://github.com/ingridtoulotte/claudestudio claudestudio
+```
+
+That builds it in a throwaway environment and launches the app. Prefer a checkout?
+
 ```bash
 git clone https://github.com/ingridtoulotte/claudestudio
 cd claudestudio
@@ -56,7 +64,7 @@ cd claudestudio
 python -m claudestudio
 ```
 
-That's it. ClaudeStudio finds `~/.claude/projects`, builds a local index, and opens the workspace in an app window (Chrome/Edge app-mode if available, otherwise your browser).
+Either way: ClaudeStudio finds `~/.claude/projects`, builds a local index, and opens the workspace in an app window (Chrome/Edge app-mode if available, otherwise your browser).
 
 **Just want to look around first?** Explore a realistic, fully synthetic dataset — no real data touched:
 
@@ -109,8 +117,14 @@ Put any two sessions side by side — messages, prompts, tool calls, tokens, cos
 <img src="docs/screenshots/compare.png" alt="Compare mode" width="92%" />
 </div>
 
+### 📤 Export & share a session
+Turn any session into a clean **Markdown** file or a **single self-contained HTML** page (inline styles, no scripts, no network) — perfect for an issue, a PR, or a gist. From the session view hit `⬇ .md` / `⬇ .html`, or use the CLI: `python -m claudestudio export <session-id> --format html`.
+
+### 🔖 Saved searches & smart collections
+Save any filter — a query, a sort, favorites-only, a project — as a named collection and jump back to it in one click. Saved collections live in your local index and survive every re-index.
+
 ### 🎁 Claude Wrapped
-A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your go-to model, favourite tool, home-base project, peak hours, epic session — copy it and share.
+A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your go-to model, favourite tool, home-base project, peak hours, epic session — copy it, or **save it as a PNG card** to share.
 
 <div align="center">
 <img src="docs/screenshots/wrapped.png" alt="Claude Wrapped" width="70%" />
@@ -171,6 +185,28 @@ Everything is **deterministic and transparent** — the cost table lives in one 
 
 ---
 
+## 🧩 For builders — use the parser, don't reverse-engineer the format
+
+Building your own Claude Code tooling? ClaudeStudio's parser is a clean,
+dependency-free reference implementation of the session wire format. Import it
+instead of reading raw `.jsonl` by hand:
+
+```python
+from claudestudio import parse_session, iter_session_files, default_projects_root
+
+for path in iter_session_files(default_projects_root()):
+    s = parse_session(path)          # -> ParsedSession | None
+    if s:
+        print(s.title, s.user_msgs, "prompts", round(s.cost_usd, 4), "USD")
+```
+
+The full wire-format reference — record types, content blocks, usage/cost, and
+every dataclass field — is documented in **[docs/FORMAT.md](docs/FORMAT.md)**.
+The public API (`parse_session`, `iter_session_files`, `default_projects_root`,
+`ParsedSession` / `Message` / `ToolCall`) is covered by the self-test.
+
+---
+
 ## 💻 CLI
 
 ```text
@@ -179,11 +215,12 @@ python -m claudestudio [command]
   (no command)   build the index if needed, then launch the app
   serve          launch the desktop app          --port --host --no-browser
   index          scan & (incrementally) index     --force
+  export         export a session to Markdown/HTML --format md|html --out FILE
   wrapped        print your Claude Wrapped         --year YYYY
   stats          headline numbers
   doctor         diagnose environment & index health
   demo           generate synthetic data & explore --count N --serve
-  --selftest     run the built-in correctness suite (48 checks, no deps)
+  --selftest     run the built-in correctness suite (70 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
@@ -209,11 +246,14 @@ ClaudeStudio is built for people who care where their data goes.
 
 ## 🗺 Roadmap
 
+- [x] Run in one command with `pipx run` (no clone) — _v0.2_
+- [x] Export a session to Markdown / shareable HTML — _v0.2_
+- [x] Saved searches & smart collections — _v0.2_
+- [x] Wrapped → shareable PNG card — _v0.2_
+- [x] Documented public parser API (`from claudestudio import parse_session`) + [FORMAT.md](docs/FORMAT.md) — _v0.2_
 - [ ] Native window + installers via an optional Tauri shell
 - [ ] Knowledge graph (projects ↔ sessions ↔ files ↔ concepts)
 - [ ] Smart highlights — auto-surface breakthroughs, fixes, and recurring patterns
-- [ ] Saved searches & smart collections
-- [ ] Export a session to Markdown / shareable HTML
 - [ ] Diff view inside replay (file-level evolution across a session)
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md).

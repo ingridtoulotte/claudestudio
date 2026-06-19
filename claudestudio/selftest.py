@@ -10,7 +10,8 @@ import math
 import os
 import tempfile
 
-from . import api, analytics, fixtures, index, parser, pricing, wrapped
+import claudestudio
+from . import api, analytics, export, fixtures, index, parser, pricing, wrapped
 
 
 class Check:
@@ -76,6 +77,13 @@ def run() -> int:
         errs = sum(1 for m in ps.messages for t in m.tool_calls if t.is_error)
         c.eq(errs, exp["tool_errors"], "tool error linked to result")
 
+        # --- public parser API (documented for other builders) -----------
+        c.ok(hasattr(claudestudio, "parse_session"), "claudestudio.parse_session is exported")
+        c.ok("parse_session" in claudestudio.__all__, "parse_session in package __all__")
+        pub = claudestudio.parse_session(exp["path"])
+        c.ok(pub is not None and pub.session_id == exp["session_id"], "parse_session parses the fixture")
+        c.eq(pub.cost_usd, ps.cost_usd, "parse_session matches parse_file")
+
         # --- index -------------------------------------------------------
         db = os.path.join(tmp, "idx.db")
         conn = index.connect(db)
@@ -133,6 +141,37 @@ def run() -> int:
         w = wrapped.generate(conn)
         c.ok(any("Sessions" == card["label"] for card in w["cards"]), "wrapped has Sessions card")
         c.ok(2026 in w["available_years"], "wrapped knows 2026")
+
+        # --- export: markdown + standalone html --------------------------
+        md = api.export_session(conn, exp["session_id"], "md")
+        c.ok(md is not None, "export_session returns markdown")
+        c.ok("# Known fixture session" in md["text"], "markdown has title heading")
+        c.ok("Fixed the off-by-one in tokenizer." in md["text"], "markdown has assistant text")
+        c.ok("Read" in md["text"] and "Edit" in md["text"], "markdown lists tool calls")
+        c.ok(md["filename"].endswith(".md"), "markdown filename extension")
+        htm = api.export_session(conn, exp["session_id"], "html")
+        c.ok("<!doctype html>" in htm["text"].lower(), "html is a full document")
+        c.ok("Known fixture session" in htm["text"], "html has title")
+        c.ok(htm["content_type"].startswith("text/html"), "html content type")
+        c.ok(htm["filename"].endswith(".html"), "html filename extension")
+        c.ok(api.export_session(conn, "does-not-exist", "md") is None, "export of unknown id is None")
+        # html is escaped — no raw angle brackets from message text leak structure
+        direct = export.to_html({"title": "<script>", "timeline": []})
+        c.ok("<script>" not in direct.split("<title>")[1], "html escapes untrusted title")
+
+        # --- saved searches / smart collections --------------------------
+        c.eq(api.list_saved(conn), [], "no saved searches initially")
+        sv = api.add_saved(conn, {"name": "Bugs", "query": "parser",
+                                  "sort": "cost", "filters": {"favorite": True}})
+        c.ok(sv["id"] >= 1, "saved search gets an id")
+        saved = api.list_saved(conn)
+        c.eq(len(saved), 1, "one saved search listed")
+        c.eq(saved[0]["name"], "Bugs", "saved name round-trips")
+        c.eq(saved[0]["filters"]["favorite"], True, "saved filters round-trip")
+        index.reindex(conn, root, force=True)
+        c.eq(len(api.list_saved(conn)), 1, "saved search survives reindex")
+        api.delete_saved(conn, sv["id"])
+        c.eq(api.list_saved(conn), [], "saved search deleted")
         conn.close()
 
         # --- larger corpus sanity ---------------------------------------

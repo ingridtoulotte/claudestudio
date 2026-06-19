@@ -313,6 +313,26 @@ def _fallback_title(ps: ParsedSession) -> str:
     return f"Session {ps.session_id[:8]}"
 
 
+def parse_session(path: str) -> ParsedSession | None:
+    """Public, stable entry point: parse one Claude Code session file.
+
+    `path` is a `~/.claude/projects/**/*.jsonl` session log. Returns a
+    `ParsedSession` (plain dataclasses — no SQL, no I/O policy) or `None` if the
+    file has no messages or cannot be read.
+
+    This is the documented API for other Claude-Code tooling — import it instead
+    of reverse-engineering the wire format:
+
+        >>> from claudestudio import parse_session
+        >>> s = parse_session("session.jsonl")
+        >>> s.title, len(s.messages), round(s.cost_usd, 4)
+
+    See `docs/FORMAT.md` for the full wire-format reference. The function is a
+    thin, named alias of `parse_file`; both are supported.
+    """
+    return parse_file(path)
+
+
 def iter_session_files(root: str) -> Iterable[str]:
     """Yield every `.jsonl` file under the Claude projects root."""
     for dirpath, _dirs, files in os.walk(root):
@@ -323,3 +343,10 @@ def iter_session_files(root: str) -> Iterable[str]:
 
 def default_projects_root() -> str:
     return os.path.join(os.path.expanduser("~"), ".claude", "projects")
+
+
+__all__ = [
+    "ParsedSession", "Message", "ToolCall",
+    "parse_session", "parse_file",
+    "iter_session_files", "default_projects_root",
+]

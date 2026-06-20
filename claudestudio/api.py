@@ -103,7 +103,7 @@ def list_sessions(conn, params: dict) -> dict:
         f"""SELECT s.*, u.favorite, u.archived, u.tags, u.notes
             FROM sessions s JOIN user_state u USING(session_id)
             WHERE {clause}
-            ORDER BY {sort_col} {order}
+            ORDER BY {sort_col} {order}, s.session_id ASC
             LIMIT ? OFFSET ?""",
         (*args, limit, offset),
     ).fetchall()
@@ -164,24 +164,69 @@ def get_session(conn, session_id: str) -> dict | None:
 
 
 def search(conn, params: dict) -> dict:
+    """Full-text search over prompts, responses, thinking and tool calls.
+
+    Ranked by BM25 (lower = more relevant) with a deterministic tiebreak so the
+    same query always returns the same order. Optional local filters, all
+    expressible from the query string so the CLI and UI share one path:
+      * kind     — restrict to user | assistant | tool messages
+      * project  — exact project path or project name
+      * session  — scope to a single session_id
+      * since/until — message time window (epoch seconds or YYYY-MM-DD)
+    """
     q = (params.get("q") or "").strip()
     limit = min(int(params.get("limit", 40) or 40), 200)
     if not q:
         return {"results": [], "query": q}
+
+    kind = (params.get("kind") or "").strip().lower()
+    project = (params.get("project") or "").strip()
+    session = (params.get("session") or "").strip()
+    since = _as_epoch(params.get("since"))
+    until = _as_epoch(params.get("until"))
+
+    where = ["search_fts MATCH ?"]
+    args: list = [_fts_query(q)]
+    join = ""
+    if kind in ("user", "assistant", "tool"):
+        where.append("f.kind = ?")
+        args.append(kind)
+    if session:
+        where.append("f.session_id = ?")
+        args.append(session)
+    if project:
+        where.append("(s.project = ? OR s.project_name = ?)")
+        args.extend([project, project])
+    if since is not None or until is not None:
+        # message epoch lives on `messages`, not the FTS shadow table
+        join = "JOIN messages mm ON mm.uuid = f.message_uuid"
+        if since is not None:
+            where.append("mm.epoch >= ?")
+            args.append(since)
+        if until is not None:
+            where.append("mm.epoch <= ?")
+            args.append(until)
+
+    clause = " AND ".join(where)
     try:
         rows = conn.execute(
-            """SELECT f.session_id, f.message_uuid, f.seq, f.kind,
+            f"""SELECT f.session_id, f.message_uuid, f.seq, f.kind,
                       snippet(search_fts, 0, '⟦', '⟧', ' … ', 14) AS snip,
                       bm25(search_fts) AS score,
                       s.title, s.project_name, s.last_epoch
-               FROM search_fts f JOIN sessions s USING(session_id)
-               WHERE search_fts MATCH ?
-               ORDER BY score LIMIT ?""",
-            (_fts_query(q), limit),
+               FROM search_fts f JOIN sessions s USING(session_id) {join}
+               WHERE {clause}
+               ORDER BY score, s.last_epoch DESC, f.session_id, f.seq
+               LIMIT ?""",
+            (*args, limit),
         ).fetchall()
     except sqlite3.OperationalError:
         return {"results": [], "query": q, "error": "bad query"}
-    return {"query": q, "results": [dict(r) for r in rows]}
+    applied = {k: v for k, v in (
+        ("kind", kind or None), ("project", project or None),
+        ("session", session or None), ("since", since), ("until", until),
+    ) if v is not None}
+    return {"query": q, "results": [dict(r) for r in rows], "filters": applied}
 
 
 def set_state(conn, session_id: str, body: dict) -> dict:
@@ -309,6 +354,24 @@ def _fts_query(q: str) -> str:
     quoted = [f'"{t}"' for t in terms[:-1]]
     quoted.append(f'"{terms[-1]}"*')
     return " ".join(quoted)
+
+
+def _as_epoch(v):
+    """Coerce a filter value to epoch seconds. Accepts a float/epoch string or a
+    plain date (YYYY-MM-DD[ HH:MM]). Returns None when absent or unparseable."""
+    if v in (None, ""):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        pass
+    import datetime as _dt
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return _dt.datetime.strptime(str(v), fmt).timestamp()
+        except ValueError:
+            continue
+    return None
 
 
 # convenience wrappers used by both server and CLI

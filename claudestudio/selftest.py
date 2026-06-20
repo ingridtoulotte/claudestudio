@@ -6,12 +6,14 @@ so CI on every OS/Python combo needs zero dependencies.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import math
 import os
 import tempfile
 
 import claudestudio
-from . import api, analytics, ask, export, fixtures, index, parser, pricing, wrapped
+from . import api, analytics, ask, cli, export, fixtures, index, parser, pricing, wrapped
 
 
 class Check:
@@ -114,6 +116,28 @@ def run() -> int:
 
         res2 = api.search(conn, {"q": "parser"})
         c.ok(len(res2["results"]) >= 1, "FTS finds tool/text 'parser'")
+
+        # --- search filters + deterministic ordering ---------------------
+        rt = api.search(conn, {"q": "parser", "kind": "tool"})
+        c.ok(rt["results"] and all(r["kind"] == "tool" for r in rt["results"]),
+             "search kind=tool restricts to tool rows")
+        c.eq(rt["filters"]["kind"], "tool", "search echoes applied kind filter")
+        rsc = api.search(conn, {"q": "parser", "session": exp["session_id"]})
+        c.ok(all(r["session_id"] == exp["session_id"] for r in rsc["results"]),
+             "search session scope restricts to one session")
+        c.eq(len(api.search(conn, {"q": "parser", "session": "nope"})["results"]), 0,
+             "search unknown session scope → empty")
+        c.ok(len(api.search(conn, {"q": "parser", "project": ps.project})["results"]) >= 1,
+             "search project filter keeps matching project")
+        c.eq(len(api.search(conn, {"q": "parser", "project": "/no/such"})["results"]), 0,
+             "search bogus project → empty")
+        c.eq(len(api.search(conn, {"q": "parser", "since": "2999-01-01"})["results"]), 0,
+             "search since=future → empty")
+        c.ok(len(api.search(conn, {"q": "parser", "until": "2999-01-01"})["results"]) >= 1,
+             "search until=future → keeps results")
+        ord1 = [(r["session_id"], r["seq"]) for r in api.search(conn, {"q": "parser"})["results"]]
+        ord2 = [(r["session_id"], r["seq"]) for r in api.search(conn, {"q": "parser"})["results"]]
+        c.eq(ord1, ord2, "search ordering is deterministic across calls")
 
         lst = api.list_sessions(conn, {})
         c.eq(lst["total"], 1, "list_sessions total=1")
@@ -232,6 +256,33 @@ def run() -> int:
              "api.ask on unknown session → error answer")
 
         conn.close()
+
+        # --- cli: list / search / ask reach the core workflows ----------
+        ap = cli.build_parser()
+
+        def _run(argv):
+            ns = ap.parse_args(argv)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = ns.func(ns)
+            return rc, buf.getvalue()
+
+        rc, out = _run(["list", "--db", db])
+        c.eq(rc, 0, "cli list exits 0")
+        c.ok(exp["session_id"][:8] in out, "cli list shows the session id")
+        rc, out = _run(["search", "parser", "--db", db])
+        c.eq(rc, 0, "cli search exits 0")
+        c.ok("parser" in out.lower(), "cli search output mentions the match")
+        rc, out = _run(["search", "parser", "--db", db, "--kind", "tool", "--json"])
+        c.eq(rc, 0, "cli search --json exits 0")
+        c.ok('"kind": "tool"' in out, "cli search --json carries the filter")
+        rc, out = _run(["ask", "what should I reopen next?", "--db", db])
+        c.eq(rc, 0, "cli ask exits 0")
+        c.ok("reopen" in out.lower(), "cli ask renders the answer title")
+        rc, out = _run(["ask", "summarize this session", "--db", db,
+                        "--session", exp["session_id"]])
+        c.eq(rc, 0, "cli ask --session exits 0")
+        c.ok("digest" in out.lower(), "cli ask scoped → digest")
 
         # --- larger corpus sanity ---------------------------------------
         root2 = os.path.join(tmp, "corpus")

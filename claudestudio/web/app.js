@@ -535,38 +535,55 @@ function toolCard(t) {
 function buildReplay(timeline) {
   const n = timeline.length;
   let idx = n, playing = false, speed = 2, timer = null, threadEl = null;
-  const playBtn = el('button', { class: 'play-btn', html: playIcon(false) });
+  const restartBtn = el('button', { class: 'replay-btn', title: 'Restart', html: ICON.restart });
+  const prevBtn = el('button', { class: 'replay-btn', title: 'Step back', html: ICON.prev });
+  const playBtn = el('button', { class: 'play-btn', title: 'Play / pause', html: playIcon(false) });
+  const nextBtn = el('button', { class: 'replay-btn', title: 'Step forward', html: ICON.next });
   const track = el('div', { class: 'replay-track' }, [el('div', { class: 'replay-prog' }), el('div', { class: 'replay-knob' })]);
   const pos = el('div', { class: 'replay-pos', text: `${n}/${n}` });
   const speeds = [1, 2, 4, 8].map((sp) => el('button', { class: sp === speed ? 'on' : '', text: sp + '×', onclick: () => { speed = sp; speeds.forEach((b) => b.classList.toggle('on', +b.textContent.replace('×', '') === sp)); } }));
-  const bar = el('div', { class: 'replaybar' }, [playBtn, track, pos, el('div', { class: 'replay-speed' }, speeds)]);
+  const bar = el('div', { class: 'replaybar' }, [restartBtn, prevBtn, playBtn, nextBtn, track, pos, el('div', { class: 'replay-speed' }, speeds)]);
 
   const prog = $('.replay-prog', track), knob = $('.replay-knob', track);
   function render() {
     if (!threadEl) return;
-    [...threadEl.children].forEach((c, i) => c.classList.toggle('hidden-msg', i >= idx));
+    const partial = idx < n;  // mid-replay → mark current turn; at end → full readable thread
+    [...threadEl.children].forEach((c, i) => {
+      c.classList.toggle('hidden-msg', i >= idx);
+      c.classList.toggle('replay-current', partial && i === idx - 1);
+    });
     const frac = n ? idx / n : 1;
     prog.style.width = (frac * 100) + '%'; knob.style.left = (frac * 100) + '%';
     pos.textContent = `${Math.min(idx, n)}/${n}`;
-    if (idx > 0 && idx <= n) {
-      const target = threadEl.children[idx - 1];
-      if (playing && target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    prevBtn.disabled = idx <= 0; nextBtn.disabled = idx >= n;
+  }
+  function focusCurrent() {
+    const target = threadEl && idx > 0 && idx <= n ? threadEl.children[idx - 1] : null;
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   function step() {
     if (idx >= n) { stop(); return; }
-    idx++; render();
+    idx++; render(); focusCurrent();
     const gap = timeline[idx - 1]?.gap_s || 0.5;
     const delay = Math.min(Math.max(gap, 0.3), 6) * 300 / speed;
     timer = setTimeout(step, delay);
   }
   function play() { if (idx >= n) { idx = 0; render(); } playing = true; playBtn.innerHTML = playIcon(true); step(); }
   function stop() { playing = false; playBtn.innerHTML = playIcon(false); clearTimeout(timer); }
+  function seek(target) { stop(); idx = Math.max(0, Math.min(n, target)); render(); focusCurrent(); }
   playBtn.addEventListener('click', () => (playing ? stop() : play()));
-  track.addEventListener('click', (e) => { stop(); const rect = track.getBoundingClientRect(); idx = Math.round(((e.clientX - rect.left) / rect.width) * n); idx = Math.max(0, Math.min(n, idx)); render(); });
+  restartBtn.addEventListener('click', () => seek(0));
+  prevBtn.addEventListener('click', () => seek(idx - 1));
+  nextBtn.addEventListener('click', () => seek(idx + 1));
+  track.addEventListener('click', (e) => { const rect = track.getBoundingClientRect(); seek(Math.round(((e.clientX - rect.left) / rect.width) * n)); });
 
   return { bar, attach(t) { threadEl = t; idx = n; render(); } };
 }
+const ICON = {
+  restart: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 5V2L7 7l5 5V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-7z" fill="currentColor"/></svg>',
+  prev: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M7 5h2v14H7zM19 5v14l-9-7z" fill="currentColor"/></svg>',
+  next: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M15 5h2v14h-2zM5 5l9 7-9 7z" fill="currentColor"/></svg>',
+};
 function playIcon(playing) {
   return playing ? '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor"/></svg>'
     : '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4l13 8-13 8z" fill="currentColor"/></svg>';

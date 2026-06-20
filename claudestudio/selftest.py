@@ -10,6 +10,7 @@ import contextlib
 import io
 import math
 import os
+import sqlite3
 import tempfile
 
 import claudestudio
@@ -100,6 +101,21 @@ def run() -> int:
         c.eq(summ["sessions"], 1, "summary sessions=1")
         c.eq(summ["tool_calls"], 2, "summary tool_calls=2")
         c.close(summ["cost_usd"], exp["cost"], "summary cost matches")
+
+        # --- schema index + read-only connection -------------------------
+        idx_names = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")]
+        c.ok("idx_msg_model" in idx_names, "messages(model) index created")
+        ro_conn = index.connect_ro(db)
+        c.eq(ro_conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0], 1,
+             "connect_ro reads the index")
+        try:
+            ro_conn.execute("INSERT INTO meta(key,value) VALUES('x','y')")
+            wrote = True
+        except sqlite3.OperationalError:
+            wrote = False
+        c.ok(not wrote, "connect_ro is read-only (writes rejected)")
+        ro_conn.close()
 
         # --- api: detail + search + analytics ----------------------------
         detail = api.get_session(conn, exp["session_id"])
@@ -298,7 +314,55 @@ def run() -> int:
         a = sorted(os.listdir(os.path.join(root2, "-home-dev-orbit-api")))
         b = sorted(os.listdir(os.path.join(root3, "-home-dev-orbit-api")))
         c.eq(a, b, "corpus generation is deterministic")
+
+        # reopen stays correct AND avoids the per-session N+1: one batched error
+        # lookup + inline citations, regardless of how many sessions it ranks.
+        qn = {"n": 0}
+        conn2.set_trace_callback(lambda s: qn.__setitem__("n", qn["n"] + 1))
+        ro2 = ask.reopen_suggestions(conn2)
+        conn2.set_trace_callback(None)
+        c.eq(ro2["intent"], "reopen", "corpus reopen intent")
+        c.ok(len(ro2["blocks"][-1]["items"]) >= 1, "corpus reopen surfaces sessions")
+        c.ok(qn["n"] <= 6, f"reopen avoids N+1 ({qn['n']} SQL stmts for 12 sessions)")
+
         conn2.close()
+
+    # --- web assets: guard the SPA wiring the UI behaviors depend on ------
+    # The behaviors themselves are JS/CSS (exercised in a browser), but these
+    # checks fail CI if a refactor strips the wiring, on every OS, zero deps.
+    web_dir = os.path.join(os.path.dirname(claudestudio.__file__), "web")
+    c.ok(os.path.isfile(os.path.join(web_dir, "index.html")), "web/index.html shipped")
+    with open(os.path.join(web_dir, "app.js"), encoding="utf-8") as fh:
+        app_js = fh.read()
+    with open(os.path.join(web_dir, "styles.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    # 1. virtual scrolling — nodes stay in the DOM, browser skips offscreen layout
+    c.ok("content-visibility: auto" in css, "css: turns virtualized via content-visibility")
+    c.ok("contain-intrinsic-size" in css, "css: intrinsic size reserved for offscreen turns")
+    # 2. keyboard navigation in replay
+    c.ok("setViewKey(" in app_js, "app.js: per-view key handler helper exists")
+    c.ok("setViewKey(null)" in app_js, "app.js: router tears down previous view's key handler")
+    c.ok("'PageDown'" in app_js and "'PageUp'" in app_js and "'Home'" in app_js and "'End'" in app_js,
+         "app.js: replay nav handles Home/End/PageUp/PageDown")
+    # 3. message grouping
+    c.ok("group-cont" in app_js and ".turn.group-cont" in css,
+         "grouping: consecutive same-role turns flagged and styled")
+    c.ok("m.role === prevRole" in app_js, "grouping: continuation computed from previous role")
+    # 4. search-term highlight in replay (escape-then-mark => no HTML injection)
+    c.ok("function markTerms(" in app_js, "app.js: markTerms highlights query terms in replay")
+    c.ok("esc(txt).replace(re" in app_js, "markTerms escapes before inserting <mark> (XSS-safe)")
+    c.ok("mark.hit" in css, "css: matched-term highlight styled")
+    # 5. search filter UI wired to the backend filters already proven above
+    c.ok("search-filters" in app_js and "search-filters" in css, "search filter toolbar present + styled")
+    c.ok("history.replaceState" in app_js, "search updates URL without re-render (keeps input focus)")
+    c.ok("search: (q, limit = 30, filters" in app_js, "API.search forwards structured filters")
+    for token in ("kind", "project", "since", "until"):
+        c.ok(token in app_js, f"search filter UI exposes the {token} filter")
+    # polish: focus visibility, error emphasis, disabled-empty submit
+    c.ok(":focus-visible" in css, "css: focus-visible ring for keyboard users")
+    c.ok(".tool-card.error" in css, "css: tool errors visually emphasized")
+    c.ok("sendBtn.disabled" in app_js, "ask: submit disabled when query empty")
 
     total = c.passed + c.failed
     print(f"\n  selftest: {c.passed}/{total} checks passed")

@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_count  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_msg_model   ON messages(model);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +151,21 @@ def connect(db_path: str) -> sqlite3.Connection:
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
+    return conn
+
+
+def connect_ro(db_path: str) -> sqlite3.Connection:
+    """Open the index for *reading only* — no schema script, no writes.
+
+    Read endpoints hit this on every request, so it skips the
+    ``executescript(_SCHEMA)`` + PRAGMA + meta-insert that :func:`connect` runs
+    (measured ~0.39 ms of pure per-request overhead). ``query_only`` makes any
+    accidental write fail loudly. The schema is the writers' responsibility —
+    ``serve``/``index`` build it via :func:`connect` before any read is served.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
     return conn
 
 

@@ -84,7 +84,11 @@ const API = {
   summary: () => API.get('/api/summary'),
   sessions: (q) => API.get('/api/sessions?' + new URLSearchParams(q)),
   session: (id) => API.get('/api/session/' + encodeURIComponent(id)),
-  search: (q, limit = 30) => API.get('/api/search?' + new URLSearchParams({ q, limit })),
+  search: (q, limit = 30, filters = {}) => {
+    const p = { q, limit };
+    for (const k of ['kind', 'project', 'since', 'until', 'session']) if (filters[k]) p[k] = filters[k];
+    return API.get('/api/search?' + new URLSearchParams(p));
+  },
   analytics: () => API.get('/api/analytics'),
   projects: () => API.get('/api/projects'),
   wrapped: (year) => API.get('/api/wrapped' + (year ? '?year=' + year : '')),
@@ -204,6 +208,15 @@ function renderFootStats(s) {
 let STATE = { summary: null };
 const view = () => $('#view');
 
+// a per-view keyboard handler, torn down whenever the route changes so handlers
+// from a previous view (e.g. replay nav) never leak into the next one.
+let _viewKey = null;
+function setViewKey(fn) {
+  if (_viewKey) document.removeEventListener('keydown', _viewKey);
+  _viewKey = fn || null;
+  if (_viewKey) document.addEventListener('keydown', _viewKey);
+}
+
 function go(route, params = {}) {
   const qs = new URLSearchParams(params).toString();
   location.hash = '#/' + route + (qs ? '?' + qs : '');
@@ -216,6 +229,7 @@ async function router() {
   const parts = path.split('/');
   const route = parts[0] || 'sessions';
   highlightNav(['session'].includes(route) ? 'sessions' : route);
+  setViewKey(null);  // drop any previous view's keyboard handler
   try {
     if (route === 'session') return await viewSession(parts[1], params);
     if (route === 'ask') return await viewAsk(params);
@@ -469,20 +483,71 @@ async function viewSession(id, params = {}) {
   // replay bar
   const replay = buildReplay(s.timeline);
   root.appendChild(replay.bar);
+  root.appendChild(el('div', { class: 'replay-hint', html: '<kbd>J</kbd> / <kbd>K</kbd> step · <kbd>Home</kbd> / <kbd>End</kbd> jump · click the track to scrub' }));
 
-  // thread
+  // thread — one node per message (keeps thread.children[i] aligned to seq, which
+  // the scrubber, file chips and deep-links all rely on). Consecutive same-role
+  // turns are flagged `group-cont` so CSS can merge them into one visual block.
   const thread = el('div', { class: 'thread' });
-  s.timeline.forEach((m, i) => thread.appendChild(turnNode(m, i)));
+  let prevRole = null;
+  s.timeline.forEach((m, i) => {
+    thread.appendChild(turnNode(m, i, m.role === prevRole));
+    prevRole = m.role;
+  });
   root.appendChild(thread);
   replay.attach(thread);
 
   view().innerHTML = ''; view().appendChild(root);
 
+  // keyboard navigation: a cursor that steps through messages independently of
+  // the replay reveal state, so you can read a long transcript hands-on-keyboard.
+  let cursor = -1;
+  function moveCursor(to) {
+    const n = thread.children.length;
+    if (!n) return;
+    to = Math.max(0, Math.min(n - 1, to));
+    if (cursor >= 0 && thread.children[cursor]) thread.children[cursor].classList.remove('cursor');
+    cursor = to;
+    const node = thread.children[cursor];
+    node.classList.add('cursor');
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  setViewKey((e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || CMDK.open) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' || e.target.isContentEditable) return;
+    const k = e.key;
+    if (k === 'j' || k === 'PageDown') { e.preventDefault(); moveCursor(cursor < 0 ? 0 : cursor + 1); }
+    else if (k === 'k' || k === 'PageUp') { e.preventDefault(); moveCursor(cursor < 0 ? 0 : cursor - 1); }
+    else if (k === 'Home') { e.preventDefault(); moveCursor(0); }
+    else if (k === 'End') { e.preventDefault(); moveCursor(thread.children.length - 1); }
+  });
+
+  // when arriving from a search result, light up the matched terms in the body
+  if (params.q) markTerms(thread, params.q);
+
   // deep-link: scroll to and spotlight a specific message (from search / Ask)
   const seq = params.seq != null ? parseInt(params.seq, 10) : null;
   if (seq != null && !Number.isNaN(seq) && thread.children[seq]) {
+    cursor = seq;  // keyboard nav continues from where the link landed
     requestAnimationFrame(() => spotlight(thread.children[seq]));
   }
+}
+
+// wrap occurrences of the query terms inside each message body with <mark.hit>.
+// Operates on textContent then re-escapes, so it can never inject markup.
+function markTerms(container, q) {
+  const terms = String(q || '').split(/\s+/)
+    .filter((t) => t.length > 1)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!terms.length) return;
+  const re = new RegExp('(' + terms.join('|') + ')', 'gi');
+  container.querySelectorAll('.msg-text').forEach((node) => {
+    const txt = node.textContent;
+    if (!txt) return;
+    const marked = esc(txt).replace(re, '<mark class="hit">$1</mark>');
+    if (marked !== esc(txt)) node.innerHTML = marked;
+  });
 }
 
 function spotlight(node) {
@@ -494,9 +559,9 @@ function spotlight(node) {
 function ds(v, k, cls = '') { return el('div', { class: 'ds' }, [el('span', { class: 'v ' + cls, text: v }), el('span', { class: 'k', text: k })]); }
 
 const TOOL_ICON = { Read: '📖', Edit: '✏️', Write: '📝', Bash: '⌨️', Grep: '🔎', Glob: '🗂', Task: '🤖', WebSearch: '🌐', WebFetch: '🌐', PowerShell: '⌨️' };
-function turnNode(m, i) {
+function turnNode(m, i, cont = false) {
   const isUser = m.role === 'user';
-  const node = el('div', { class: `turn ${m.role}`, 'data-i': i });
+  const node = el('div', { class: `turn ${m.role} ${cont ? 'group-cont' : 'group-start'}`, 'data-i': i });
   node.appendChild(el('div', { class: 'avatar ' + (isUser ? 'user' : 'assistant'), text: isUser ? 'U' : 'C' }));
   const bubble = el('div', { class: 'bubble' });
   const who = el('div', { class: 'who' }, [el('b', { text: isUser ? 'You' : 'Claude' })]);
@@ -519,7 +584,7 @@ function turnNode(m, i) {
 function toolCard(t) {
   const icon = TOOL_ICON[t.name] || '⚙️';
   const argText = Object.entries(t.input || {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');
-  return el('div', { class: 'tool-card' }, [
+  return el('div', { class: 'tool-card' + (t.is_error ? ' error' : '') }, [
     el('div', { class: 'tool-head' }, [
       el('span', { class: 'ticon', text: icon }),
       el('span', { class: 'tname', text: t.name }),
@@ -908,25 +973,83 @@ function saveWrappedCard(data) {
 }
 
 // ---- view: search (full page) ---------------------------------------------
+const KINDS = [['', 'Any role'], ['user', 'Prompts'], ['assistant', 'Responses'], ['tool', 'Tool calls']];
 async function viewSearch(params) {
-  const q = params.q || '';
-  view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const res = q ? await API.search(q, 80) : { results: [] };
   const root = el('div', { class: 'view-pad fade-in' });
+  const sub = el('div', { class: 'page-sub', text: 'Search every prompt, response, and tool call' });
   root.appendChild(el('div', { class: 'page-head' }, [el('div', {}, [
-    el('h1', { class: 'page-title', text: 'Search' }),
-    el('div', { class: 'page-sub', html: q ? `${res.results.length} matches for <b>${esc(q)}</b>` : 'Search every prompt, response, and tool call' }),
+    el('h1', { class: 'page-title', text: 'Search' }), sub,
   ])]));
+
+  // ---- controls (text + structured filters the backend already understands) --
+  const qBox = el('div', { class: 'search-box' }, [
+    el('span', { html: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M21 21l-4.3-4.3M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' }),
+    el('input', { class: 'input', placeholder: 'Search prompts, responses, tool calls…', value: params.q || '', autocomplete: 'off' }),
+  ]);
+  const qInput = $('input', qBox);
+  const kindSel = el('select', { class: 'input' }, KINDS.map(([v, l]) => el('option', { value: v, text: l, ...(v === (params.kind || '') ? { selected: 'selected' } : {}) })));
+  const projInput = el('input', { class: 'input', placeholder: 'Project…', value: params.project || '', style: 'width:150px' });
+  const sinceInput = el('input', { class: 'input', type: 'date', title: 'On or after', value: params.since || '' });
+  const untilInput = el('input', { class: 'input', type: 'date', title: 'On or before', value: params.until || '' });
+  const clearBtn = el('button', { class: 'chip toggle', title: 'Clear filters' }, ['Clear']);
+
+  root.appendChild(el('div', { class: 'toolbar search-filters' }, [
+    qBox, kindSel,
+    el('div', { class: 'field' }, [el('span', { class: 'field-k', text: 'in' }), projInput]),
+    el('div', { class: 'field' }, [el('span', { class: 'field-k', text: 'from' }), sinceInput, el('span', { class: 'field-k', text: 'to' }), untilInput]),
+    clearBtn,
+  ]));
+
   const list = el('div', { class: 'session-list' });
-  res.results.forEach((r) => list.appendChild(searchResultRow(r)));
-  if (!res.results.length) list.appendChild(el('div', { class: 'empty', text: q ? 'No matches.' : 'Type in the search bar (⌘K) to begin.' }));
   root.appendChild(list);
   view().innerHTML = ''; view().appendChild(root);
+
+  // run() fetches with the current control values and rewrites the URL *without*
+  // a re-render (replaceState fires no hashchange), so the inputs keep focus and
+  // the search stays shareable/bookmarkable.
+  async function run() {
+    const q = qInput.value.trim();
+    const filters = { kind: kindSel.value, project: projInput.value.trim(), since: sinceInput.value, until: untilInput.value };
+    const qs = new URLSearchParams();
+    if (q) qs.set('q', q);
+    for (const k of ['kind', 'project', 'since', 'until']) if (filters[k]) qs.set(k, filters[k]);
+    history.replaceState(null, '', '#/search' + (qs.toString() ? '?' + qs : ''));
+
+    if (!q) {
+      sub.textContent = 'Search every prompt, response, and tool call';
+      list.innerHTML = ''; list.appendChild(el('div', { class: 'empty', text: 'Type to search your sessions…' }));
+      return;
+    }
+    list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    let res;
+    try { res = await API.search(q, 80, filters); }
+    catch (e) { list.innerHTML = ''; list.appendChild(el('div', { class: 'empty', text: 'Search failed: ' + (e.message || e) })); return; }
+    const n = res.results.length;
+    sub.innerHTML = `<b>${n}</b> match${n === 1 ? '' : 'es'} for <b>${esc(q)}</b>`;
+    list.innerHTML = '';
+    if (!n) { list.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'big', text: 'No matches' }), el('div', { text: 'Try fewer words or relax the filters.' })])); return; }
+    res.results.forEach((r) => list.appendChild(searchResultRow(r, q)));
+  }
+
+  let t;
+  const debounced = () => { clearTimeout(t); t = setTimeout(run, 200); };
+  qInput.addEventListener('input', debounced);
+  projInput.addEventListener('input', debounced);
+  kindSel.addEventListener('change', run);
+  sinceInput.addEventListener('change', run);
+  untilInput.addEventListener('change', run);
+  clearBtn.addEventListener('click', () => { kindSel.value = ''; projInput.value = ''; sinceInput.value = ''; untilInput.value = ''; run(); qInput.focus(); });
+
+  qInput.focus();
+  run();
 }
 
-function searchResultRow(r) {
+function searchResultRow(r, q) {
   const snip = esc(r.snip || '').replace(/⟦/g, '<mark>').replace(/⟧/g, '</mark>');
-  return el('div', { class: 's-row', onclick: () => go('session/' + r.session_id, r.seq != null ? { seq: r.seq } : {}) }, [
+  const params = {};
+  if (r.seq != null) params.seq = r.seq;
+  if (q) params.q = q;  // carry the query so the replay view highlights it too
+  return el('div', { class: 's-row', onclick: () => go('session/' + r.session_id, params) }, [
     el('div', { class: 's-main' }, [
       el('div', { class: 's-title' }, [el('span', { class: 'txt', text: r.title || 'Untitled' })]),
       el('div', { class: 's-preview snip', html: snip }),
@@ -969,6 +1092,8 @@ async function viewAsk(params) {
   const sendBtn = el('button', { class: 'btn-send', title: 'Ask', html: '✦ Ask' });
   const composer = el('div', { class: 'ask-composer' }, [input, sendBtn]);
   root.appendChild(composer);
+  const syncSend = () => { sendBtn.disabled = !input.value.trim(); };
+  input.addEventListener('input', syncSend); syncSend();
 
   function renderSuggestions(list) {
     sugWrap.innerHTML = '';
@@ -1111,7 +1236,7 @@ async function cmdkRender(q) {
   const navCmds = NAV.filter((n) => !q || n.label.toLowerCase().includes(q.toLowerCase())).map((n) => ({ type: 'nav', label: 'Go to ' + n.label, route: n.id, icon: '→' }));
   let results = [];
   if (q && q.length >= 2) {
-    try { const r = await API.search(q, 18); results = r.results.map((x) => ({ type: 'result', label: x.title || 'Untitled', snip: x.snip, session: x.session_id, seq: x.seq, project: x.project_name, icon: '◷' })); } catch { /* ignore */ }
+    try { const r = await API.search(q, 18); results = r.results.map((x) => ({ type: 'result', label: x.title || 'Untitled', snip: x.snip, session: x.session_id, seq: x.seq, project: x.project_name, q, icon: '◷' })); } catch { /* ignore */ }
   }
   CMDK.items = [...navCmds, ...results];
   CMDK.sel = 0;
@@ -1130,7 +1255,16 @@ function cmdkItem(it, i) {
   ]);
 }
 function updateSel() { $$('#cmdk-results .cmdk-item').forEach((n) => n.classList.toggle('sel', +n.dataset.i === CMDK.sel)); }
-function runCmdk(it) { closeCmdk(); if (it.type === 'nav') go(it.route); else if (it.type === 'result') go('session/' + it.session, it.seq != null ? { seq: it.seq } : {}); }
+function runCmdk(it) {
+  closeCmdk();
+  if (it.type === 'nav') return go(it.route);
+  if (it.type === 'result') {
+    const p = {};
+    if (it.seq != null) p.seq = it.seq;
+    if (it.q) p.q = it.q;
+    go('session/' + it.session, p);
+  }
+}
 
 // ---- reindex --------------------------------------------------------------
 async function doReindex() {

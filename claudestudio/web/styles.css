@@ -45,12 +45,21 @@ body {
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
+  color-scheme: dark;  /* native controls (date pickers, scrollbars) follow the theme */
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "cv05" 1, "ss01" 1;
 }
 ::selection { background: var(--accent-soft); }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; color: inherit; }
+
+/* a single, consistent focus ring across every interactive surface — keyboard
+   users get a clear, on-brand affordance without muddying mouse interactions. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+button:focus-visible, a:focus-visible, .s-row:focus-visible,
+.nav-item:focus-visible, .input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.input:focus-visible { outline-offset: 0; }
 
 /* scrollbars */
 * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.14) transparent; }
@@ -183,6 +192,10 @@ select.input { cursor: pointer; }
 
 /* ---- session list --------------------------------------------------------- */
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.search-filters { gap: 10px; }
+.search-filters .field { display: inline-flex; align-items: center; gap: 6px; }
+.search-filters .field-k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); }
+.search-filters input[type="date"] { font-size: 12.5px; padding: 7px 9px; color: var(--text-2); }
 .session-list { display: flex; flex-direction: column; gap: 8px; }
 .s-row {
   display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; align-items: center;
@@ -284,11 +297,38 @@ select.input { cursor: pointer; }
 .replay-speed button.on { color: var(--accent); border-color: var(--accent); }
 
 .thread { display: flex; flex-direction: column; gap: 16px; }
-.turn { display: flex; gap: 13px; opacity: 1; transition: opacity .3s, transform .3s; }
+.turn {
+  display: flex; gap: 13px; opacity: 1; transition: opacity .3s, transform .3s;
+  /* virtualization without losing DOM nodes: the browser skips layout/paint for
+     off-screen turns (huge wins on long transcripts) while every node stays in
+     the DOM, so the scrubber, file chips and ?seq deep-links keep working. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
+  scroll-margin-top: 84px;  /* clear the sticky replay bar when scrolled into view */
+}
 .turn.hidden-msg { opacity: .12; }
 .turn.replay-current .bubble { box-shadow: 0 0 0 1px var(--accent), 0 0 16px -4px var(--accent); }
 .turn.replay-current .avatar { outline: 2px solid var(--accent); outline-offset: 1px; }
 .turn.spotlight { transform: scale(1.0); }
+
+/* grouping: consecutive turns from the same actor merge into one visual block —
+   the repeated avatar + name fall away and the gap tightens. */
+.turn.group-cont { margin-top: -11px; }
+.turn.group-cont .avatar { visibility: hidden; }
+.turn.group-cont .who { display: none; }
+
+/* keyboard-nav cursor (J/K/Home/End) */
+.turn.cursor .bubble { box-shadow: 0 0 0 1px var(--accent), 0 0 20px -7px var(--accent); border-radius: 12px; }
+
+.replay-hint {
+  display: flex; justify-content: flex-end; gap: 4px; align-items: center;
+  margin: -10px 2px 16px; color: var(--text-3); font-size: 11px;
+}
+.replay-hint kbd { font-size: 10px; padding: 1px 5px; }
+@media (max-width: 760px) { .replay-hint { display: none; } }
+
+/* matched search terms, lit in the message body when arriving from a result */
+mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 2px; font-weight: 600; }
 .avatar { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
 .avatar.user { background: var(--surface-3); color: var(--text-2); }
 .avatar.assistant { background: linear-gradient(140deg, var(--accent), var(--accent-2)); color: #1a1206; }
@@ -303,6 +343,8 @@ select.input { cursor: pointer; }
 .thinking .tk { color: var(--text-3); font-size: 12.5px; padding: 6px 0 6px 14px; white-space: pre-wrap; font-style: italic; }
 
 .tool-card { margin-top: 9px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
+.tool-card.error { border-color: rgba(238,106,106,.4); }
+.tool-card.error .tool-head { background: rgba(238,106,106,.08); box-shadow: inset 3px 0 0 var(--bad); }
 .tool-head { display: flex; align-items: center; gap: 9px; padding: 9px 13px; font-size: 12.5px; }
 .tool-head .tname { font-family: var(--mono); font-weight: 600; color: var(--text); }
 .tool-head .ticon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; flex: none; background: var(--surface-3); }
@@ -505,6 +547,7 @@ select.input { cursor: pointer; }
 .btn-send { padding: 0 20px; border-radius: var(--radius-sm); border: none; font-weight: 600; font-size: 13.5px;
   background: linear-gradient(120deg, var(--accent), var(--accent-2)); color: #1a1206; transition: transform .12s; }
 .btn-send:hover { transform: translateY(-1px); }
+.btn-send:disabled { opacity: .45; cursor: default; transform: none; filter: grayscale(.3); }
 
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
+import json
 import os
 import sys
+import textwrap
 import time
 
 from . import __version__, api, index, parser as _parser, server, wrapped, fixtures, selftest
@@ -158,6 +161,123 @@ def cmd_demo(args):
     return 0
 
 
+def _fmt_day(epoch) -> str:
+    try:
+        return _dt.datetime.fromtimestamp(float(epoch)).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OSError, TypeError):
+        return "—"
+
+
+def cmd_list(args):
+    conn = index.connect(args.db)
+    params = {"limit": args.limit, "sort": args.sort}
+    if args.query:
+        params["q"] = args.query
+    if args.project:
+        params["project"] = args.project
+    if args.model:
+        params["model"] = args.model
+    if args.favorite:
+        params["favorite"] = "1"
+    params["archived"] = args.archived
+    res = api.list_sessions(conn, params)
+    conn.close()
+    if args.json:
+        print(json.dumps(res, default=str, indent=2))
+        return 0
+    rows = res["sessions"]
+    if not rows:
+        print("  No sessions match.")
+        return 0
+    for s in rows:
+        star = "★" if s.get("favorite") else " "
+        title = (s.get("title") or "Untitled").replace("\n", " ")[:48]
+        print(f"  {star} {s['session_id']}  {_fmt_day(s.get('last_epoch')):16}  "
+              f"{int(s.get('msg_count') or 0):>4} msg  {(s.get('project_name') or ''):<14}  {title}")
+    print(f"\n  {len(rows)} of {res.get('total', len(rows))} session(s)")
+    return 0
+
+
+def cmd_search(args):
+    conn = index.connect(args.db)
+    params = {"q": args.query, "limit": args.limit}
+    for k in ("kind", "project", "session", "since", "until"):
+        v = getattr(args, k, None)
+        if v:
+            params[k] = v
+    res = api.search(conn, params)
+    conn.close()
+    if args.json:
+        print(json.dumps(res, default=str, indent=2))
+        return 0
+    if res.get("error"):
+        print(f"  Bad query: {args.query!r}")
+        return 1
+    results = res.get("results", [])
+    if not results:
+        print(f"  No matches for {args.query!r}.")
+        return 0
+    for r in results:
+        snip = (r.get("snip") or "").replace("\n", " ").strip()
+        print(f"  {r['session_id']}  #{r.get('seq'):<4} [{r.get('kind','?'):<9}] "
+              f"{(r.get('title') or 'Untitled')[:40]}")
+        if snip:
+            print(f"      {snip}")
+    print(f"\n  {len(results)} match(es). Export one with "
+          f"`claudestudio export <id>`, or `serve` and open ?seq=<n>.")
+    return 0
+
+
+def _print_ask(res):
+    title = res.get("title", "")
+    print()
+    print(f"  {title}")
+    print("  " + "─" * min(max(len(title), 4), 64))
+    for b in res.get("blocks", []):
+        label, kind = b.get("label"), b.get("type")
+        if label:
+            print(f"\n  {label}:")
+        if kind == "text":
+            for line in textwrap.wrap(str(b.get("text", "")), 76) or [""]:
+                print(f"    {line}")
+        elif kind in ("list", "steps"):
+            for it in b.get("items", []):
+                print(f"    • {it}")
+        elif kind == "decisions":
+            for it in b.get("items", []):
+                print(f"    • {it.get('text', '')}  [#{it.get('seq')}]")
+        elif kind == "stats":
+            cells = [f"{it.get('value')} {it.get('label')}" for it in b.get("items", [])]
+            print("    " + "  ·  ".join(cells))
+        elif kind == "files":
+            for it in b.get("items", []):
+                ops = it.get("ops")
+                ops = "+".join(ops) if isinstance(ops, (list, tuple)) else str(ops or "")
+                print(f"    {it.get('name', ''):<28} {ops:<14} ×{it.get('count', 0)}"
+                      + (f"  ({it.get('errors')} err)" if it.get("errors") else ""))
+        elif kind == "sessions":
+            for it in b.get("items", []):
+                print(f"    {it.get('session_id', '')}  "
+                      f"{(it.get('title') or 'Untitled')[:34]:<34}  — {it.get('reason', '')}")
+        else:  # compare / unknown — degrade gracefully
+            for it in b.get("items", []) or []:
+                print(f"    • {it}")
+    g = res.get("grounding")
+    if g:
+        print(f"\n  {g}\n")
+
+
+def cmd_ask(args):
+    conn = index.connect(args.db)
+    res = api.ask(conn, args.question, args.session)
+    conn.close()
+    if args.json:
+        print(json.dumps(res, default=str, indent=2))
+        return 0
+    _print_ask(res)
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -178,6 +298,40 @@ def build_parser():
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("list", help="list indexed sessions (most recent first)")
+    _add_common(p)
+    p.add_argument("-q", "--query", default=None, help="filter by full-text / title match")
+    p.add_argument("--project", default=None, help="restrict to a project path")
+    p.add_argument("--model", default=None, help="restrict to a model substring")
+    p.add_argument("--sort", default="recent",
+                   choices=sorted(api.SORT_COLUMNS.keys()), help="sort order (default: recent)")
+    p.add_argument("--favorite", action="store_true", help="only favorited sessions")
+    p.add_argument("--archived", default="exclude", choices=["exclude", "only", "all"],
+                   help="archived sessions: exclude (default), only, or all")
+    p.add_argument("--limit", type=int, default=40)
+    p.add_argument("--json", action="store_true", help="emit raw JSON for scripting")
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("search", help="full-text search across all sessions (BM25)")
+    _add_common(p)
+    p.add_argument("query", help="words to search for")
+    p.add_argument("--kind", default=None, choices=["user", "assistant", "tool"],
+                   help="restrict to a message kind")
+    p.add_argument("--project", default=None, help="restrict to a project path/name")
+    p.add_argument("--session", default=None, help="scope to one session id")
+    p.add_argument("--since", default=None, help="only messages on/after this date (YYYY-MM-DD)")
+    p.add_argument("--until", default=None, help="only messages on/before this date (YYYY-MM-DD)")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true", help="emit raw JSON for scripting")
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("ask", help="ask your history a question (grounded, no model calls)")
+    _add_common(p)
+    p.add_argument("question", help="e.g. \"what should I reopen next?\"")
+    p.add_argument("--session", default=None, help="scope the question to one session id")
+    p.add_argument("--json", action="store_true", help="emit raw JSON for scripting")
+    p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("wrapped", help="print your Claude Wrapped summary")
     _add_common(p)

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Terminal-first workflows.** New `list`, `search`, and `ask` CLI commands put
+  the core workflows in the terminal without the UI. All three support `--json`
+  for scripting and print full, copy-pasteable session ids (feed one straight to
+  `export`). `search` accepts `--kind`, `--project`, `--session`, `--since`, and
+  `--until` filters; `list` accepts `--query`, `--project`, `--model`, `--sort`,
+  `--favorite`, and `--archived`.
+- **Search filters & stable ranking.** `/api/search` (and the CLI) now filter by
+  message kind, project, single-session scope, and message time window — all
+  local, all expressible from the query string. Results are BM25-ranked with a
+  deterministic tiebreak, so the same query always returns the same order.
+- **Replay you can drive.** The session replay bar gained **restart**, **step
+  back**, and **step forward** controls, and the message thread now highlights
+  the **current** turn during replay so the active position is always obvious.
+
+### Changed
+- Self-test grew to **115** exact-assertion checks (search filters, deterministic
+  ordering, and the new CLI commands are covered).
+
 ## [0.3.0] - 2026-06-20
 
 ### Added

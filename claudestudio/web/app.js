@@ -89,6 +89,7 @@ const API = {
   projects: () => API.get('/api/projects'),
   wrapped: (year) => API.get('/api/wrapped' + (year ? '?year=' + year : '')),
   compare: (a, b) => API.get('/api/compare?' + new URLSearchParams({ a, b })),
+  ask: (q, session) => API.get('/api/ask?' + new URLSearchParams(session ? { q, session } : { q })),
   state: (id, patch) => API.post('/api/state/' + encodeURIComponent(id), patch),
   reindex: () => API.post('/api/reindex', {}),
   exportUrl: (id, fmt) => '/api/session/' + encodeURIComponent(id) + '/export.' + fmt,
@@ -167,6 +168,7 @@ function toast(msg, kind = 'ok') {
 // ---- nav ------------------------------------------------------------------
 const NAV = [
   { id: 'sessions', label: 'Sessions', icon: 'M4 6h16M4 12h16M4 18h10' },
+  { id: 'ask', label: 'Ask', icon: 'M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 21l2.1-5.4A8.5 8.5 0 1 1 21 11.5z' },
   { id: 'timeline', label: 'Timeline', icon: 'M3 12h4l3-8 4 16 3-8h4' },
   { id: 'analytics', label: 'Analytics', icon: 'M4 19V5M4 19h16M8 16v-5M13 16V8M18 16v-9' },
   { id: 'projects', label: 'Projects', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
@@ -215,7 +217,8 @@ async function router() {
   const route = parts[0] || 'sessions';
   highlightNav(['session'].includes(route) ? 'sessions' : route);
   try {
-    if (route === 'session') return await viewSession(parts[1]);
+    if (route === 'session') return await viewSession(parts[1], params);
+    if (route === 'ask') return await viewAsk(params);
     if (route === 'analytics') return await viewAnalytics();
     if (route === 'projects') return await viewProjects();
     if (route === 'timeline') return await viewTimeline();
@@ -310,7 +313,22 @@ async function viewSessions(params) {
     const data = await API.sessions(q);
     listWrap.innerHTML = '';
     if (!data.sessions.length) {
-      listWrap.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'big', text: 'No sessions match' }), el('div', { text: 'Try a different filter, or hit Sync to re-scan.' })]));
+      const noFilter = !sessionsState.q && !sessionsState.favorite && !sessionsState.project && sessionsState.archived !== 'only';
+      const firstRun = noFilter && (STATE.summary ? STATE.summary.sessions === 0 : true);
+      if (firstRun) {
+        listWrap.appendChild(el('div', { class: 'onboard' }, [
+          el('div', { class: 'onboard-icn', text: '✦' }),
+          el('div', { class: 'big', text: 'No sessions indexed yet' }),
+          el('div', { class: 'onboard-sub', text: 'ClaudeStudio reads your Claude Code logs from ~/.claude/projects — entirely on this machine. Sync to index them, or explore with realistic sample data first.' }),
+          el('div', { class: 'onboard-actions' }, [
+            el('button', { class: 'btn-primary', onclick: () => doReindex() }, ['↻ Sync my sessions']),
+          ]),
+          el('div', { class: 'onboard-hint', html: 'No real sessions yet? Run <code>claudestudio demo</code> in your terminal for a synthetic workspace.' }),
+          el('div', { class: 'foot-privacy', style: 'justify-content:center', html: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M12 2l8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> 100% local · nothing leaves your machine' }),
+        ]));
+      } else {
+        listWrap.appendChild(el('div', { class: 'empty' }, [el('div', { class: 'big', text: 'No sessions match' }), el('div', { text: 'Try a different filter, or hit Sync to re-scan.' })]));
+      }
       return;
     }
     const list = el('div', { class: 'session-list' });
@@ -359,7 +377,36 @@ function sessionRow(s) {
 }
 
 // ---- view: session detail / replay ----------------------------------------
-async function viewSession(id) {
+// pull the files a session touched straight from its loaded timeline — instant,
+// client-side, and consistent with the server-side ask engine's heuristic.
+function briefFromTimeline(timeline) {
+  const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+  const READ = new Set(['Read', 'NotebookRead']);
+  const files = new Map();
+  const tools = new Map();
+  let errors = 0;
+  for (const m of timeline) for (const t of (m.tools || [])) {
+    tools.set(t.name, (tools.get(t.name) || 0) + 1);
+    if (t.is_error) errors++;
+    const inp = t.input || {};
+    for (const key of ['file_path', 'path', 'notebook_path']) {
+      const v = inp[key];
+      if (typeof v === 'string' && /\.[A-Za-z0-9]{1,8}$/.test(v.replace(/\\/g, '/'))) {
+        const name = v.replace(/\\/g, '/').split('/').pop();
+        const f = files.get(name) || { name, ops: new Set(), seq: m.seq };
+        f.ops.add(EDIT.has(t.name) ? 'edit' : READ.has(t.name) ? 'read' : 'use');
+        files.set(name, f);
+      }
+    }
+  }
+  return {
+    files: [...files.values()].sort((a, b) => (b.ops.has('edit') - a.ops.has('edit'))),
+    tools: [...tools.entries()].sort((a, b) => b[1] - a[1]),
+    errors,
+  };
+}
+
+async function viewSession(id, params = {}) {
   view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const s = await API.session(id);
   const root = el('div', { class: 'view-pad fade-in' });
@@ -368,12 +415,13 @@ async function viewSession(id) {
   const star = el('button', { class: 'iconbtn' + (s.favorite ? ' on' : ''), title: 'Favorite', html: s.favorite ? '★' : '☆', onclick: async () => { const r = await API.state(id, { favorite: !s.favorite }); s.favorite = r.favorite; star.classList.toggle('on', r.favorite); star.innerHTML = r.favorite ? '★' : '☆'; toast(r.favorite ? 'Favorited' : 'Unfavorited'); } });
   const arch = el('button', { class: 'iconbtn' + (s.archived ? ' on' : ''), title: 'Archive', html: '🗄', onclick: async () => { const r = await API.state(id, { archived: !s.archived }); s.archived = r.archived; arch.classList.toggle('on', r.archived); toast(r.archived ? 'Archived' : 'Unarchived'); } });
 
+  const askBtn = el('button', { class: 'btn-ghost accent', title: 'Ask the grounded companion about this session', onclick: () => go('ask', { session: id }) }, ['✦ Ask about this']);
   const expMd = el('button', { class: 'btn-ghost', title: 'Export to Markdown', onclick: () => { downloadFrom(API.exportUrl(id, 'md')); toast('Exported Markdown'); } }, ['⬇ .md']);
   const expHtml = el('button', { class: 'btn-ghost', title: 'Export to a standalone, shareable HTML file', onclick: () => { downloadFrom(API.exportUrl(id, 'html')); toast('Exported HTML'); } }, ['⬇ .html']);
 
   root.appendChild(el('div', { class: 'page-head' }, [
     el('a', { href: '#/sessions', class: 'btn-ghost', html: '← Sessions' }),
-    el('div', { class: 'page-actions' }, [expMd, expHtml, star, arch]),
+    el('div', { class: 'page-actions' }, [askBtn, expMd, expHtml, star, arch]),
   ]));
 
   const modelChips = (s.models || []).map((m) => { const f = family(m); return el('span', { class: `chip model-chip fam-${f}` }, [el('span', { class: 'dot' }), shortModel(m)]); });
@@ -395,6 +443,29 @@ async function viewSession(id) {
     ]),
   ]));
 
+  // at-a-glance brief — files touched + tools, computed from the timeline
+  const brief = briefFromTimeline(s.timeline);
+  if (brief.files.length || brief.tools.length) {
+    const chips = brief.files.slice(0, 8).map((f) => el('span', {
+      class: 'file-chip' + (f.ops.has('edit') ? ' edited' : ''),
+      title: [...f.ops].join(' + '),
+      onclick: () => { const t = thread.children[f.seq]; if (t) spotlight(t); },
+    }, [el('span', { class: 'op', text: f.ops.has('edit') ? '✎' : '◌' }), f.name]));
+    root.appendChild(el('div', { class: 'brief' }, [
+      el('div', { class: 'brief-row' }, [
+        el('span', { class: 'brief-k', text: 'Files' }),
+        brief.files.length ? el('div', { class: 'brief-chips' }, chips)
+          : el('span', { class: 'brief-empty', text: 'none touched' }),
+      ]),
+      el('div', { class: 'brief-row' }, [
+        el('span', { class: 'brief-k', text: 'Tools' }),
+        el('div', { class: 'brief-chips' }, brief.tools.slice(0, 6).map(([n, c]) =>
+          el('span', { class: 'tag-pill', text: `${n} ×${c}` }))),
+        brief.errors ? el('span', { class: 'brief-err', text: `${brief.errors} error${brief.errors > 1 ? 's' : ''}` }) : null,
+      ].filter(Boolean)),
+    ]));
+  }
+
   // replay bar
   const replay = buildReplay(s.timeline);
   root.appendChild(replay.bar);
@@ -406,6 +477,18 @@ async function viewSession(id) {
   replay.attach(thread);
 
   view().innerHTML = ''; view().appendChild(root);
+
+  // deep-link: scroll to and spotlight a specific message (from search / Ask)
+  const seq = params.seq != null ? parseInt(params.seq, 10) : null;
+  if (seq != null && !Number.isNaN(seq) && thread.children[seq]) {
+    requestAnimationFrame(() => spotlight(thread.children[seq]));
+  }
+}
+
+function spotlight(node) {
+  node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  node.classList.add('flash');
+  setTimeout(() => node.classList.remove('flash'), 1600);
 }
 
 function ds(v, k, cls = '') { return el('div', { class: 'ds' }, [el('span', { class: 'v ' + cls, text: v }), el('span', { class: 'k', text: k })]); }
@@ -826,7 +909,7 @@ async function viewSearch(params) {
 
 function searchResultRow(r) {
   const snip = esc(r.snip || '').replace(/⟦/g, '<mark>').replace(/⟧/g, '</mark>');
-  return el('div', { class: 's-row', onclick: () => go('session/' + r.session_id) }, [
+  return el('div', { class: 's-row', onclick: () => go('session/' + r.session_id, r.seq != null ? { seq: r.seq } : {}) }, [
     el('div', { class: 's-main' }, [
       el('div', { class: 's-title' }, [el('span', { class: 'txt', text: r.title || 'Untitled' })]),
       el('div', { class: 's-preview snip', html: snip }),
@@ -834,6 +917,170 @@ function searchResultRow(r) {
     ]),
     el('div', { class: 's-side' }, [el('div', { class: 's-time', text: fmt.rel(r.last_epoch) })]),
   ]);
+}
+
+// ---- view: ask (grounded local companion) ---------------------------------
+async function viewAsk(params) {
+  const sessionScope = params.session || '';
+  let scopeTitle = '';
+  if (sessionScope) {
+    try { scopeTitle = (await API.session(sessionScope)).title || sessionScope.slice(0, 8); } catch { scopeTitle = sessionScope.slice(0, 8); }
+  }
+  const root = el('div', { class: 'view-pad fade-in ask-view' });
+  root.appendChild(el('div', { class: 'page-head' }, [
+    el('div', {}, [
+      el('h1', { class: 'page-title', html: 'Ask <span class="ask-badge">grounded · local</span>' }),
+      el('div', { class: 'page-sub', text: 'Ask your Claude Code history anything. Every answer is computed from your real sessions on this machine — no model calls, nothing uploaded.' }),
+    ]),
+  ]));
+
+  if (sessionScope) {
+    root.appendChild(el('div', { class: 'ask-scope' }, [
+      el('span', { text: 'Scoped to ' }),
+      el('b', { text: scopeTitle }),
+      el('button', { class: 'x', title: 'Clear scope', onclick: () => go('ask') }, ['×']),
+    ]));
+  }
+
+  const thread = el('div', { class: 'ask-thread' });
+  root.appendChild(thread);
+
+  const sugWrap = el('div', { class: 'ask-suggest' });
+  root.appendChild(sugWrap);
+
+  const input = el('input', { class: 'input', placeholder: sessionScope ? 'Ask about this session…' : 'Ask about your sessions, files, cost, what to reopen…', autocomplete: 'off' });
+  const sendBtn = el('button', { class: 'btn-send', title: 'Ask', html: '✦ Ask' });
+  const composer = el('div', { class: 'ask-composer' }, [input, sendBtn]);
+  root.appendChild(composer);
+
+  function renderSuggestions(list) {
+    sugWrap.innerHTML = '';
+    if (!list || !list.length) return;
+    sugWrap.appendChild(el('span', { class: 'ask-suggest-lbl', text: 'Try' }));
+    list.forEach((q) => sugWrap.appendChild(el('button', { class: 'chip toggle', onclick: () => submit(q) }, [q])));
+  }
+  renderSuggestions(sessionScope
+    ? ['What happened in this session?', 'Give me a handoff brief', 'Which files changed?', 'What are the most important tool calls?']
+    : ['What should I reopen next?', 'Summarize my most recent session', 'Where did the tokens go?', 'Give me a handoff brief']);
+
+  let busy = false;
+  async function submit(q) {
+    q = (q || input.value).trim();
+    if (!q || busy) return;
+    busy = true; input.value = '';
+    thread.appendChild(el('div', { class: 'ask-q' }, [el('span', { class: 'ask-q-txt', text: q })]));
+    const loading = el('div', { class: 'ask-a loading-a' }, [el('div', { class: 'spinner sm' })]);
+    thread.appendChild(loading);
+    loading.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    try {
+      const ans = await API.ask(q, sessionScope || undefined);
+      loading.replaceWith(answerCard(ans));
+      if (ans.suggestions) renderSuggestions(ans.suggestions);
+    } catch (e) {
+      loading.replaceWith(el('div', { class: 'ask-a' }, [el('div', { class: 'ask-a-body' }, [el('div', { class: 'empty', text: 'Could not answer: ' + (e.message || e) })])]));
+    } finally {
+      busy = false;
+      thread.lastChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      input.focus();
+    }
+  }
+  sendBtn.addEventListener('click', () => submit());
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+  view().innerHTML = ''; view().appendChild(root);
+  input.focus();
+  if (params.q) submit(params.q);
+}
+
+function answerCard(ans) {
+  const card = el('div', { class: 'ask-a' });
+  const body = el('div', { class: 'ask-a-body' });
+  body.appendChild(el('div', { class: 'ask-a-title', text: ans.title || 'Answer' }));
+  (ans.blocks || []).forEach((b) => { const n = askBlock(b); if (n) body.appendChild(n); });
+  body.appendChild(el('div', { class: 'ask-a-foot' }, [
+    el('span', { class: 'shield', html: '<svg viewBox="0 0 24 24" width="11" height="11"><path d="M12 2l8 4v6c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>' }),
+    el('span', { text: ans.grounding || 'Computed locally · no model calls.' }),
+  ]));
+  card.appendChild(body);
+  return card;
+}
+
+function askBlock(b) {
+  if (b.type === 'stats') {
+    return el('div', { class: 'ask-stats' }, (b.items || []).map((it) =>
+      el('div', { class: 'ask-stat' + (it.tone === 'bad' && it.value ? ' bad' : '') }, [
+        el('span', { class: 'v' + (it.accent ? ' accent' : ''), text: String(it.value) }),
+        el('span', { class: 'k', text: it.label }),
+      ])));
+  }
+  if (b.type === 'text') {
+    return el('div', { class: 'ask-text-block' }, [
+      b.label ? el('div', { class: 'ask-lbl', text: b.label }) : null,
+      el('div', { class: 'ask-text', text: b.text || '' }),
+    ].filter(Boolean));
+  }
+  if (b.type === 'list' || b.type === 'steps') {
+    return el('div', { class: 'ask-text-block' }, [
+      b.label ? el('div', { class: 'ask-lbl', text: b.label }) : null,
+      el('ul', { class: b.type === 'steps' ? 'ask-steps' : 'ask-list' }, (b.items || []).map((x) => el('li', { text: x }))),
+    ].filter(Boolean));
+  }
+  if (b.type === 'files') {
+    return el('div', { class: 'ask-text-block' }, [
+      b.label ? el('div', { class: 'ask-lbl', text: b.label }) : null,
+      el('div', { class: 'ask-files' }, (b.items || []).map((f) => el('div', {
+        class: 'ask-file' + (f.edited ? ' edited' : ''),
+        title: (f.ops || []).join(' + '),
+        onclick: () => f.session_id && go('session/' + f.session_id, f.seq != null ? { seq: f.seq } : {}),
+      }, [
+        el('span', { class: 'op', text: f.edited ? '✎' : '◌' }),
+        el('span', { class: 'fname', text: f.name || f.path }),
+        f.count ? el('span', { class: 'cnt', text: '×' + f.count }) : null,
+        f.errors ? el('span', { class: 'ferr', text: f.errors + ' err' }) : null,
+      ].filter(Boolean)))),
+    ].filter(Boolean));
+  }
+  if (b.type === 'decisions') {
+    return el('div', { class: 'ask-text-block' }, [
+      b.label ? el('div', { class: 'ask-lbl', text: b.label }) : null,
+      el('div', { class: 'ask-decisions' }, (b.items || []).map((d) => el('div', {
+        class: 'ask-decision' + (d.session_id ? ' link' : ''),
+        onclick: () => d.session_id && go('session/' + d.session_id, d.seq != null ? { seq: d.seq } : {}),
+      }, [el('span', { class: 'q', text: '“' }), el('span', { class: 'd-txt', text: d.text }), d.session_id ? el('span', { class: 'jump', text: '↗' }) : null].filter(Boolean)))),
+    ].filter(Boolean));
+  }
+  if (b.type === 'sessions') {
+    return el('div', { class: 'ask-text-block' }, [
+      b.label ? el('div', { class: 'ask-lbl', text: b.label }) : null,
+      el('div', { class: 'ask-sessions' }, (b.items || []).map((s) => el('div', {
+        class: 'ask-session', onclick: () => go('session/' + s.session_id, s.seq != null ? { seq: s.seq } : {}),
+      }, [
+        el('div', { class: 'as-main' }, [
+          el('div', { class: 'as-title', text: s.title || 'Untitled' }),
+          el('div', { class: 'as-reason', text: s.reason || '' }),
+        ]),
+        el('div', { class: 'as-side' }, [
+          el('span', { class: 'proj-chip', text: s.project_name || '' }),
+          s.last_epoch ? el('span', { class: 's-time', text: fmt.rel(s.last_epoch) }) : null,
+        ].filter(Boolean)),
+      ]))),
+    ].filter(Boolean));
+  }
+  if (b.type === 'compare') {
+    return el('div', { class: 'panel', style: 'margin-top:4px' }, [
+      el('div', { class: 'cmp-row' }, [el('span', { class: 'k', text: '' }), el('span', { class: 'a', text: (b.a || '').slice(0, 26) }), el('span', { class: 'b', text: (b.b || '').slice(0, 26) }), el('span', {})]),
+      ...(b.rows || []).map((r) => {
+        const f = r.money ? fmt.cost : fmt.num;
+        return el('div', { class: 'cmp-row' }, [
+          el('span', { class: 'k', text: r.label }),
+          el('span', { class: 'a' + (r.a > r.b ? ' win' : ''), text: f(r.a) }),
+          el('span', { class: 'b' + (r.b > r.a ? ' win' : ''), text: f(r.b) }),
+          el('span', { class: 'usage-tag', text: r.a === r.b ? '=' : (r.a > r.b ? '◀' : '▶') }),
+        ]);
+      }),
+    ]);
+  }
+  return null;
 }
 
 // ---- command palette ------------------------------------------------------
@@ -847,7 +1094,7 @@ async function cmdkRender(q) {
   const navCmds = NAV.filter((n) => !q || n.label.toLowerCase().includes(q.toLowerCase())).map((n) => ({ type: 'nav', label: 'Go to ' + n.label, route: n.id, icon: '→' }));
   let results = [];
   if (q && q.length >= 2) {
-    try { const r = await API.search(q, 18); results = r.results.map((x) => ({ type: 'result', label: x.title || 'Untitled', snip: x.snip, session: x.session_id, project: x.project_name, icon: '◷' })); } catch { /* ignore */ }
+    try { const r = await API.search(q, 18); results = r.results.map((x) => ({ type: 'result', label: x.title || 'Untitled', snip: x.snip, session: x.session_id, seq: x.seq, project: x.project_name, icon: '◷' })); } catch { /* ignore */ }
   }
   CMDK.items = [...navCmds, ...results];
   CMDK.sel = 0;
@@ -866,7 +1113,7 @@ function cmdkItem(it, i) {
   ]);
 }
 function updateSel() { $$('#cmdk-results .cmdk-item').forEach((n) => n.classList.toggle('sel', +n.dataset.i === CMDK.sel)); }
-function runCmdk(it) { closeCmdk(); if (it.type === 'nav') go(it.route); else if (it.type === 'result') go('session/' + it.session); }
+function runCmdk(it) { closeCmdk(); if (it.type === 'nav') go(it.route); else if (it.type === 'result') go('session/' + it.session, it.seq != null ? { seq: it.seq } : {}); }
 
 // ---- reindex --------------------------------------------------------------
 async function doReindex() {

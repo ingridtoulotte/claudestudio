@@ -11,7 +11,7 @@ import os
 import tempfile
 
 import claudestudio
-from . import api, analytics, export, fixtures, index, parser, pricing, wrapped
+from . import api, analytics, ask, export, fixtures, index, parser, pricing, wrapped
 
 
 class Check:
@@ -172,6 +172,65 @@ def run() -> int:
         c.eq(len(api.list_saved(conn)), 1, "saved search survives reindex")
         api.delete_saved(conn, sv["id"])
         c.eq(api.list_saved(conn), [], "saved search deleted")
+
+        # --- ask: grounded local companion -------------------------------
+        sid = exp["session_id"]
+        ft = ask.files_touched(conn, sid)
+        c.eq(len(ft), 1, "files_touched finds the one file")
+        c.eq(ft[0]["name"], "parser.py", "files_touched names parser.py")
+        c.ok("edit" in ft[0]["ops"] and "read" in ft[0]["ops"], "parser.py read and edited")
+        c.ok(ft[0]["edited"], "parser.py flagged as edited")
+        c.eq(ft[0]["errors"], 1, "files_touched counts the edit error")
+
+        dig = ask.session_digest(conn, sid)
+        c.eq(dig["intent"], "digest", "digest intent")
+        c.ok(any(b["type"] == "files" for b in dig["blocks"]), "digest has a files block")
+        c.ok(dig["citations"][0]["session_id"] == sid, "digest cites the session")
+        c.ok("no model calls" in dig["grounding"], "digest states no model calls")
+
+        hb = ask.handoff_brief(conn, sid)
+        c.eq(hb["intent"], "handoff", "handoff intent")
+        steps = [b for b in hb["blocks"] if b["type"] == "steps"]
+        c.ok(steps and any("error" in s.lower() for s in steps[0]["items"]),
+             "handoff flags the open error")
+
+        it = ask.important_tools(conn, sid)
+        first = it["blocks"][-1]["items"][0]["text"]
+        c.ok(first.startswith("Edit") or first.startswith("Write"),
+             "important_tools ranks the edit first")
+
+        fh = ask.file_history(conn, "parser.py")
+        c.eq(fh["intent"], "files", "file_history intent")
+        c.ok(any(s["session_id"] == sid for s in fh["blocks"][-1]["items"]),
+             "file_history finds the session that edited parser.py")
+
+        ro = ask.reopen_suggestions(conn)
+        c.eq(ro["intent"], "reopen", "reopen intent")
+        c.ok(any(s["session_id"] == sid for s in ro["blocks"][-1]["items"]),
+             "reopen surfaces the session")
+        c.ok(any("error" in s["reason"] for s in ro["blocks"][-1]["items"]),
+             "reopen explains the error signal")
+
+        # router: scoped + global
+        c.eq(ask.answer(conn, "what happened in this session?", sid)["intent"],
+             "digest", "router → digest when scoped")
+        c.eq(ask.answer(conn, "give me a handoff brief", sid)["intent"],
+             "handoff", "router → handoff when scoped")
+        c.eq(ask.answer(conn, "which files changed?", sid)["intent"],
+             "files", "router → files when scoped")
+        c.eq(ask.answer(conn, "what should I reopen next?")["intent"],
+             "reopen", "router → reopen globally")
+        c.eq(ask.answer(conn, "where did the tokens go?")["intent"],
+             "spend", "router → spend globally")
+        c.eq(ask.answer(conn, "why was parser.py edited?")["intent"],
+             "files", "router → file history from a path")
+        c.ok(ask.answer(conn, "")["intent"] == "help", "empty question → help")
+        # api wrapper attaches suggestions
+        wrapped_ask = api.ask(conn, "summarize this session", sid)
+        c.ok(len(wrapped_ask["suggestions"]) == 4, "api.ask attaches 4 suggestions")
+        c.ok(api.ask(conn, "anything", "does-not-exist")["intent"] == "error",
+             "api.ask on unknown session → error answer")
+
         conn.close()
 
         # --- larger corpus sanity ---------------------------------------

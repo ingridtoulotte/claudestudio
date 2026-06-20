@@ -158,6 +158,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.wrapped_payload(conn, int(year) if year else None))
                 if path == "/api/compare":
                     return self._send_json(api.compare(conn, params.get("a", ""), params.get("b", "")))
+                if path == "/api/ask":
+                    return self._send_json(api.ask(conn, params.get("q", ""), params.get("session") or None))
                 if path == "/api/saved":
                     return self._send_json({"saved": api.list_saved(conn)})
                 if path.startswith("/api/session/") and "/export" in path:

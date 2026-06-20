@@ -12,7 +12,7 @@ import re
 import sqlite3
 import time
 
-from . import analytics, export, wrapped, index
+from . import analytics, export, wrapped, index, ask as ask_engine
 
 SORT_COLUMNS = {
     "recent": "last_epoch",
@@ -316,3 +316,10 @@ def summary(conn): return index.session_summary(conn)
 def analytics_payload(conn): return analytics.overview(conn)
 def projects_payload(conn): return {"projects": analytics.projects(conn)}
 def wrapped_payload(conn, year=None): return wrapped.generate(conn, year)
+
+
+def ask(conn, question, session=None) -> dict:
+    """Grounded, local Q&A over the indexed history (see `ask.py`). No model calls."""
+    payload = ask_engine.answer(conn, question, session)
+    payload["suggestions"] = ask_engine.suggestions(bool(session))
+    return payload

@@ -83,6 +83,11 @@ python -m claudestudio demo --serve
 ### 🗂 Browse every session
 A fast, sortable, filterable list of every conversation. Search titles, filter by favorites, sort by recency, cost, message count, tools used, or duration. Star the keepers, archive the noise.
 
+### ✦ Ask your history — a grounded, local companion
+A question box for your whole Claude Code history. Ask *"what should I reopen next?"*, *"give me a handoff brief"*, *"which files changed?"*, *"why was `parser.py` edited?"*, or *"where did the tokens go?"* and get a structured answer with **citations that deep-link straight to the exact session and message**.
+
+It is **grounded, not generative**: every answer is *computed* from your local index with deterministic rules — **no model calls, nothing uploaded, no API key.** The same question always gives the same answer, and each one is footed with what it was computed from. Open any session and hit **✦ Ask about this** to scope it to that session (digest, handoff brief, most-important tool calls).
+
 ### ⏯ Replay sessions like a movie
 Watch Claude work. Press play and the conversation unfolds chronologically — prompts, thinking, tool calls, and edits revealing themselves with real pacing. Scrub the timeline, jump anywhere, change speed.
 
@@ -251,6 +256,7 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] Saved searches & smart collections — _v0.2_
 - [x] Wrapped → shareable PNG card — _v0.2_
 - [x] Documented public parser API (`from claudestudio import parse_session`) + [FORMAT.md](docs/FORMAT.md) — _v0.2_
+- [x] **Ask** — grounded, local Q&A over your history (handoff briefs, "what to reopen", file history) — _v0.3_
 - [ ] Native window + installers via an optional Tauri shell
 - [ ] Knowledge graph (projects ↔ sessions ↔ files ↔ concepts)
 - [ ] Smart highlights — auto-surface breakthroughs, fixes, and recurring patterns

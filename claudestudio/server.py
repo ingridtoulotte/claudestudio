@@ -59,6 +59,10 @@ class Handler(BaseHTTPRequestHandler):
     def _conn(self):
         return index.connect(self.db_path)
 
+    def _conn_ro(self):
+        # read endpoints skip the schema re-exec the writer path runs
+        return index.connect_ro(self.db_path)
+
     def _send_json(self, obj, status=200):
         payload = json.dumps(obj, default=str).encode("utf-8")
         self.send_response(status)
@@ -141,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_get(self, path, params):
         try:
-            conn = self._conn()
+            conn = self._conn_ro()  # GET endpoints are pure reads
             try:
                 if path == "/api/summary":
                     return self._send_json(api.summary(conn))

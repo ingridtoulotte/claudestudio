@@ -111,8 +111,11 @@ def _latest_session_id(conn, project: str | None = None) -> str | None:
     return r["session_id"] if r else None
 
 
-def _cite(conn, sid: str, seq: int | None = None) -> dict:
-    meta = _session_meta(conn, sid) or {"session_id": sid, "title": sid[:8]}
+def _cite(conn, sid: str, seq: int | None = None, meta: dict | None = None) -> dict:
+    # callers that already hold the session row can pass `meta` to skip the
+    # per-citation lookup (was an N+1 in reopen / file_history).
+    if meta is None:
+        meta = _session_meta(conn, sid) or {"session_id": sid, "title": sid[:8]}
     c = {"session_id": sid, "title": meta.get("title") or "Untitled",
          "project_name": meta.get("project_name")}
     if seq is not None:
@@ -322,9 +325,22 @@ def reopen_suggestions(conn, limit: int = 6) -> dict:
                      [{"type": "text", "text": "No sessions are indexed. Hit Sync, "
                        "or run `claudestudio demo` to explore with sample data."}],
                      [], grounding=_ground(0))
+    # batch the "ended on an error?" lookup for every candidate in one query,
+    # instead of one _ended_on_error() round-trip per session (the N+1 hot spot).
+    # MAX(id) + bare columns returns the name/seq of each session's latest error.
+    ids = [r["session_id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    last_err: dict[str, sqlite3.Row] = {}
+    for er in conn.execute(
+        f"SELECT session_id, name, seq, MAX(id) AS _mid FROM tool_calls "
+        f"WHERE is_error=1 AND session_id IN ({placeholders}) GROUP BY session_id",
+        ids,
+    ):
+        last_err[er["session_id"]] = er
+
     scored = []
     for i, r in enumerate(rows):
-        err = _ended_on_error(conn, r["session_id"])
+        err = last_err.get(r["session_id"])
         recency = max(0, 40 - i)  # newer = higher
         reasons = []
         score = recency
@@ -346,7 +362,7 @@ def reopen_suggestions(conn, limit: int = 6) -> dict:
             "cost_usd": r["cost_usd"], "msg_count": r["msg_count"],
             "reason": "; ".join(reasons) or "recent",
         })
-    cites = [_cite(conn, it["session_id"]) for it in items]
+    cites = [_cite(conn, it["session_id"], meta=it) for it in items]
     return _wrap("reopen", "What to reopen next",
                  [{"type": "text",
                    "text": "Ranked by recency and whether the session looks unfinished "
@@ -407,7 +423,7 @@ def file_history(conn, query: str, limit: int = 30) -> dict:
                    "text": f"Sessions that touched a path matching “{query}”, "
                            "edits first. Open one to see exactly where and why."},
                   {"type": "sessions", "items": items}],
-                 [_cite(conn, b["session_id"], b["seq"]) for b in sessions],
+                 [_cite(conn, b["session_id"], b["seq"], meta=b) for b in sessions],
                  grounding=_ground(len(by_session)))
 
 

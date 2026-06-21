@@ -196,6 +196,21 @@ def run() -> int:
              "list until=past → empty")
         c.eq(api.list_sessions(conn, {"until": "2026-07-01"})["total"], 1,
              "list until=future → keeps session")
+        # `until` is inclusive of the whole selected day: picking the session's
+        # own active day must keep it (regression — a bare date used to resolve to
+        # midnight and drop everything after 00:00). Bound derived from the stored
+        # epoch in local time so the check is timezone-independent.
+        import datetime as _dt
+        _row = conn.execute(
+            "SELECT first_epoch, last_epoch FROM sessions WHERE session_id=?",
+            (exp["session_id"],),
+        ).fetchone()
+        _start_day = _dt.datetime.fromtimestamp(_row["first_epoch"]).strftime("%Y-%m-%d")
+        _end_day = _dt.datetime.fromtimestamp(_row["last_epoch"]).strftime("%Y-%m-%d")
+        c.eq(api.list_sessions(conn, {"until": _end_day})["total"], 1,
+             "list until=active-day → keeps session (inclusive end day)")
+        c.eq(api.list_sessions(conn, {"since": _start_day, "until": _end_day})["total"], 1,
+             "list single-day window → keeps session")
 
         # state round-trips and survives reindex
         api.set_state(conn, exp["session_id"], {"favorite": True, "tags": ["bug"]})

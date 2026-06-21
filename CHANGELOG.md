@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `until` keeps sessions started on/before it. Backward-compatible — both
   optional; unparseable values are ignored, not fatal.
 
+### Fixed
+- **`until` date bound now includes the whole selected day.** A bare `until`
+  date (e.g. from the UI date picker) resolved to that day's *midnight*, so
+  `list_sessions`/`search` dropped everything that happened after 00:00 — picking
+  today as the end date returned nothing for today's sessions. The upper bound now
+  stretches to the day's last instant. `since` was already correct (midnight keeps
+  the whole start day); raw epochs and values with an explicit time are unchanged.
+
 ## [0.4.0] - 2026-06-21
 
 ### Security

@@ -91,9 +91,11 @@ def list_sessions(conn, params: dict) -> dict:
     # date-range filter on session activity, mirroring search()'s since/until.
     # Overlap semantics: `since` keeps sessions still active on/after the bound
     # (last_epoch >= since); `until` keeps sessions started on/before it
-    # (first_epoch <= until). Accepts epoch or YYYY-MM-DD via _as_epoch.
+    # (first_epoch <= until). Accepts epoch or YYYY-MM-DD via _as_epoch; a bare
+    # `until` date is inclusive of the whole day (end_of_day) so picking a date
+    # in the UI keeps that day's sessions instead of excluding them.
     since = _as_epoch(params.get("since"))
-    until = _as_epoch(params.get("until"))
+    until = _as_epoch(params.get("until"), end_of_day=True)
     if since is not None:
         where.append("s.last_epoch >= ?")
         args.append(since)
@@ -196,7 +198,7 @@ def search(conn, params: dict) -> dict:
     project = (params.get("project") or "").strip()
     session = (params.get("session") or "").strip()
     since = _as_epoch(params.get("since"))
-    until = _as_epoch(params.get("until"))
+    until = _as_epoch(params.get("until"), end_of_day=True)  # inclusive end day
 
     where = ["search_fts MATCH ?"]
     args: list = [_fts_query(q)]
@@ -370,9 +372,17 @@ def _fts_query(q: str) -> str:
     return " ".join(quoted)
 
 
-def _as_epoch(v):
+def _as_epoch(v, *, end_of_day=False):
     """Coerce a filter value to epoch seconds. Accepts a float/epoch string or a
-    plain date (YYYY-MM-DD[ HH:MM]). Returns None when absent or unparseable."""
+    plain date (YYYY-MM-DD[ HH:MM]). Returns None when absent or unparseable.
+
+    A *date-only* value normally resolves to that day's midnight, which is right
+    for an inclusive lower bound (``since`` keeps the whole start day). For an
+    inclusive *upper* bound (``until``) pass ``end_of_day=True`` so the value
+    stretches to the day's last instant — otherwise ``<= until`` would drop
+    everything that happened after 00:00 on the selected day. A value that
+    already carries a time (or is a raw epoch) is used as-is.
+    """
     if v in (None, ""):
         return None
     try:
@@ -380,9 +390,17 @@ def _as_epoch(v):
     except (TypeError, ValueError):
         pass
     import datetime as _dt
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
+    s = str(v)
+    try:  # date-only: optionally stretch to end of day for inclusive upper bounds
+        d = _dt.datetime.strptime(s, "%Y-%m-%d")
+        if end_of_day:
+            d = d.replace(hour=23, minute=59, second=59, microsecond=999_999)
+        return d.timestamp()
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return _dt.datetime.strptime(str(v), fmt).timestamp()
+            return _dt.datetime.strptime(s, fmt).timestamp()
         except ValueError:
             continue
     return None

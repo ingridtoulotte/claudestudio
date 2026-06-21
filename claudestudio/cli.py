@@ -47,7 +47,11 @@ def _safe_out_path(out: str, default_name: str) -> pathlib.Path:
     base = pathlib.Path(out).expanduser() if out else pathlib.Path(default_name)
     if out and (base.is_dir() or out.endswith(("/", os.sep))):
         base = base / default_name
-    return base.resolve()
+    # os.path.abspath first: it forces an absolute, `..`-collapsed path on every
+    # platform, including Python 3.9 on Windows where Path.resolve() leaves a
+    # non-existent relative path relative (fixed in 3.10). resolve() then folds
+    # any symlinks in the (existing) parents.
+    return pathlib.Path(os.path.abspath(base)).resolve()
 
 BANNER = rf"""
    ___ _                _      ___ _            _ _

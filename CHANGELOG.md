@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-21
+
+### Security
+- **Host-header validation.** The local server now rejects any request whose
+  `Host` header is not its own loopback interface (or an explicitly chosen
+  `--host`), returning `421`. This closes the DNS-rebinding / localhost-CSRF
+  surface where a malicious page resolves its name to `127.0.0.1`.
+- **Cross-site write protection.** State-mutating endpoints (favorites, archive,
+  tags, saved searches, reindex) now require `Sec-Fetch-Site: same-origin` and
+  reject a cross-origin `Origin`, so a third-party page can't change your state.
+- **Security response headers** on every response: a strict
+  `Content-Security-Policy`, `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`.
+- **`--host` warning.** Binding to a non-loopback host prints a clear warning to
+  stderr — it exposes your session history to the network. The default is
+  unchanged (`127.0.0.1`).
+- **Contained exports.** `export --out` paths are resolved (collapsing `..`)
+  before writing.
+
 ### Added
 - **Terminal-first workflows.** New `list`, `search`, and `ask` CLI commands put
   the core workflows in the terminal without the UI. All three support `--json`
@@ -21,10 +40,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Replay you can drive.** The session replay bar gained **restart**, **step
   back**, and **step forward** controls, and the message thread now highlights
   the **current** turn during replay so the active position is always obvious.
+- **Schema versioning & forward migration.** The SQLite index records its schema
+  version; opening one written by a newer build now fails with a clear, actionable
+  error instead of returning wrong numbers, and there is a place for ordered
+  forward migrations that preserve your favorites/tags/notes.
+- **PyPI publishing workflow.** A Trusted-Publishing (OIDC) GitHub Actions
+  workflow builds and uploads the wheel + sdist (no stored tokens), enabling
+  `pip install claudestudio` once the publisher is configured.
+- **pytest test suite** (`tests/`): parser-free unit + server-integration tests
+  for the index/migration, pricing, API, export-path guard, and the new security
+  gates — run with `pip install -e ".[dev]" && pytest`. The zero-dependency
+  `--selftest` remains the canonical gate.
+- **`py.typed` marker** (PEP 561) so downstream type checkers trust the public
+  parser/pricing hints.
+- **Pricing staleness signal.** `pricing.py` carries a `PRICE_TABLE_DATE`;
+  `doctor` flags — and the self-test guards — a table older than its max age.
 
 ### Changed
-- Self-test grew to **115** exact-assertion checks (search filters, deterministic
-  ordering, and the new CLI commands are covered).
+- Self-test grew to **148** exact-assertion checks (schema migration + pricing
+  staleness covered) on top of search filters, deterministic ordering, and the
+  CLI commands.
+- CI gained `ruff` + `mypy` and a cross-platform `pytest` job alongside the
+  existing zero-dependency self-test matrix; `pyproject.toml` now carries
+  `[project.optional-dependencies] dev`, `[tool.ruff]`, `[tool.mypy]`, and
+  `[tool.pytest.ini_options]`.
+
+### Fixed
+- The server now drains a rejected request's body before responding, so a blocked
+  cross-site `POST`/`DELETE` returns a clean `403` instead of resetting the socket.
 
 ## [0.3.0] - 2026-06-20
 
@@ -92,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synthetic `demo` mode and a built-in `--selftest`.
 - Cross-platform CI (3 operating systems x 3 Python versions).
 
-[Unreleased]: https://github.com/ingridtoulotte/claudestudio/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ingridtoulotte/claudestudio/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ingridtoulotte/claudestudio/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ingridtoulotte/claudestudio/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ingridtoulotte/claudestudio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ingridtoulotte/claudestudio/releases/tag/v0.1.0

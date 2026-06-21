@@ -30,7 +30,7 @@ import os
 import re
 import sqlite3
 
-from . import analytics, pricing
+from . import analytics
 
 # ---------------------------------------------------------------------------
 # tool taxonomy — how a tool call touches the workspace
@@ -236,10 +236,6 @@ def session_digest(conn, sid: str) -> dict:
     tools = _tool_breakdown(conn, sid)
     decisions = _key_statements(conn, sid)
     errors = sum(t["errors"] for t in tools)
-    tokens = conn.execute(
-        "SELECT COALESCE(SUM(input_tokens+output_tokens+cache_write+cache_read),0) t "
-        "FROM sessions WHERE session_id=?", (sid,),
-    ).fetchone()["t"]
 
     blocks: list[dict] = [
         {"type": "stats", "items": [
@@ -557,10 +553,9 @@ _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
 def _detect_path(q: str) -> str | None:
     for tok in re.findall(r"[\w./\\-]+", q):
         norm = tok.replace("\\", "/")
-        if _FILEISH.search(norm) and ("." in norm):
-            # avoid catching version numbers like 4.8
-            if re.search(r"[A-Za-z]", norm):
-                return tok
+        # require a dot and at least one letter — avoids version numbers like 4.8
+        if _FILEISH.search(norm) and "." in norm and re.search(r"[A-Za-z]", norm):
+            return tok
     return None
 
 

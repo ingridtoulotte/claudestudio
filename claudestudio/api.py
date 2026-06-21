@@ -12,7 +12,8 @@ import re
 import sqlite3
 import time
 
-from . import analytics, export, wrapped, index, ask as ask_engine
+from . import analytics, export, index, wrapped
+from . import ask as ask_engine
 
 SORT_COLUMNS = {
     "recent": "last_epoch",
@@ -231,7 +232,8 @@ def search(conn, params: dict) -> dict:
 
 def set_state(conn, session_id: str, body: dict) -> dict:
     conn.execute("INSERT OR IGNORE INTO user_state(session_id) VALUES(?)", (session_id,))
-    fields, args = [], []
+    fields: list[str] = []
+    args: list = []
     if "favorite" in body:
         fields.append("favorite=?")
         args.append(1 if body["favorite"] else 0)
@@ -327,7 +329,7 @@ def delete_saved(conn, saved_id) -> dict:
     return {"deleted": True, "id": sid}
 
 
-def _slug(text: str, fallback: str = "session") -> str:
+def _slug(text: str | None, fallback: str = "session") -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "").strip().lower()).strip("-")
     return (s[:60] or fallback)
 

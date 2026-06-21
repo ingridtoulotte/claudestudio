@@ -19,12 +19,18 @@ import json
 import os
 import sqlite3
 import time
-from typing import Iterable
 
 from . import parser
 from .parser import ParsedSession
 
+# Bump this whenever the on-disk schema changes in a way an old index can't
+# satisfy, and add the matching step to `maybe_migrate`. The version is stored
+# in the `meta` table so an upgrade can migrate forward — and a *downgrade*
+# (opening a newer index with an older build) fails loudly instead of silently
+# returning wrong data.
 SCHEMA_VERSION = 1
+# Back-compat alias for callers/tests that want the explicit name.
+CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +152,50 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
-    conn.execute(
-        "INSERT OR IGNORE INTO meta(key,value) VALUES('schema_version',?)",
-        (str(SCHEMA_VERSION),),
-    )
+    maybe_migrate(conn)
     conn.commit()
     return conn
+
+
+def stored_schema_version(conn: sqlite3.Connection) -> int:
+    """Read the schema version recorded in the index, or 0 if none/garbage.
+
+    0 means "predates versioning" — `maybe_migrate` treats it as a baseline that
+    upgrades cleanly to the current version.
+    """
+    row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return 0
+
+
+def maybe_migrate(conn: sqlite3.Connection) -> None:
+    """Bring an index up to `SCHEMA_VERSION`. Safe (idempotent) on every open.
+
+    The schema script (run by `connect`) already creates every table with
+    ``IF NOT EXISTS``; this owns the *version bookkeeping* and the forward/back
+    safety checks. Opening an index written by a newer ClaudeStudio raises a
+    clear, actionable error instead of letting a build read a schema it doesn't
+    understand and return wrong numbers.
+    """
+    stored = stored_schema_version(conn)
+    if stored > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"This index was written by a newer ClaudeStudio (schema v{stored}) "
+            f"than this build (schema v{SCHEMA_VERSION}). Upgrade ClaudeStudio, "
+            f"or delete the index and re-run `claudestudio index` to rebuild it."
+        )
+    # Forward migrations go here, ordered and idempotent, e.g.:
+    #   if stored < 2:
+    #       conn.execute("ALTER TABLE sessions ADD COLUMN ...")
+    # Each step lifts an old index to the next version without losing user state.
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
+        (str(SCHEMA_VERSION),),
+    )
 
 
 def connect_ro(db_path: str) -> sqlite3.Connection:
@@ -196,7 +240,7 @@ def _insert_session(conn, ps: ParsedSession) -> None:
         for m in ps.messages:
             if m.model:
                 counts[m.model] = counts.get(m.model, 0) + 1
-        primary_model = max(counts, key=counts.get) if counts else ps.models[0]
+        primary_model = max(counts, key=lambda k: counts[k]) if counts else ps.models[0]
 
     preview = ""
     for m in ps.messages:
@@ -208,16 +252,18 @@ def _insert_session(conn, ps: ParsedSession) -> None:
         """INSERT OR REPLACE INTO sessions VALUES
            (:sid,:title,:project,:pname,:branch,:version,:fts,:lts,:fe,:le,:dur,
             :mc,:um,:am,:tc,:models,:pm,:it,:ot,:cw,:cr,:cost,:fp,:prev)""",
-        dict(
-            sid=ps.session_id, title=ps.title, project=ps.project, pname=project_name,
-            branch=ps.git_branch, version=ps.version, fts=ps.first_ts, lts=ps.last_ts,
-            fe=_parse_ts(ps.first_ts) or 0.0, le=_parse_ts(ps.last_ts) or 0.0,
-            dur=ps.duration_seconds, mc=len(ps.messages), um=ps.user_msgs,
-            am=ps.assistant_msgs, tc=ps.tool_call_count,
-            models=json.dumps(ps.models), pm=primary_model,
-            it=ps.total_input, ot=ps.total_output, cw=ps.total_cache_write,
-            cr=ps.total_cache_read, cost=ps.cost_usd, fp=ps.file_path, prev=preview,
-        ),
+        {
+            "sid": ps.session_id, "title": ps.title, "project": ps.project,
+            "pname": project_name, "branch": ps.git_branch, "version": ps.version,
+            "fts": ps.first_ts, "lts": ps.last_ts,
+            "fe": _parse_ts(ps.first_ts) or 0.0, "le": _parse_ts(ps.last_ts) or 0.0,
+            "dur": ps.duration_seconds, "mc": len(ps.messages), "um": ps.user_msgs,
+            "am": ps.assistant_msgs, "tc": ps.tool_call_count,
+            "models": json.dumps(ps.models), "pm": primary_model,
+            "it": ps.total_input, "ot": ps.total_output, "cw": ps.total_cache_write,
+            "cr": ps.total_cache_read, "cost": ps.cost_usd, "fp": ps.file_path,
+            "prev": preview,
+        },
     )
     conn.execute(
         "INSERT OR IGNORE INTO user_state(session_id) VALUES(?)", (ps.session_id,)

@@ -9,8 +9,6 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 
-from . import analytics, pricing
-
 
 def _fmt_int(n: float) -> str:
     return f"{int(n):,}"

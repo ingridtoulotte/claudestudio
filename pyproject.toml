@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.3.0"
+version = "0.4.0"
 description = "The desktop workspace for Claude Code — explore, search, replay and understand every session, locally."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -22,6 +22,16 @@ classifiers = [
 ]
 dependencies = []  # zero — standard library only
 
+# Dev-only tooling. The shipped package stays zero-dependency; these are just for
+# contributors: `pip install -e ".[dev]"` then `pytest`, `ruff check`, `mypy`.
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
 [project.urls]
 Homepage = "https://github.com/ingridtoulotte/claudestudio"
 Repository = "https://github.com/ingridtoulotte/claudestudio"
@@ -36,5 +46,31 @@ include-package-data = true
 
 # The web/ assets live inside the package so they ship in the wheel — this is
 # what lets `pipx run --spec git+…/claudestudio claudestudio` work with no clone.
+# `py.typed` ships the PEP 561 marker so downstream type checkers trust our hints.
 [tool.setuptools.package-data]
-claudestudio = ["web/**/*", "web/*", "web/assets/*"]
+claudestudio = ["web/**/*", "web/*", "web/assets/*", "py.typed"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+# E501 (line length) is advisory here; the codebase predates a formatter pass.
+ignore = ["E501"]
+
+[tool.mypy]
+ignore_missing_imports = true
+# Gradual typing: enforce hints where they're declared (the public parser/pricing
+# API is fully annotated) without descending into not-yet-typed legacy bodies.
+# Raise the bar over time by annotating a module then adding it to `strict`.
+
+# The zero-dep self-test runner is test scaffolding: it deliberately pokes at
+# values the type checker can't narrow (e.g. parse_file()'s Optional result after
+# a runtime assert). It's exercised end-to-end by CI, not the type gate.
+[[tool.mypy.overrides]]
+module = "claudestudio.selftest"
+ignore_errors = true
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

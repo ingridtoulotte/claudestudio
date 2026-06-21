@@ -10,6 +10,14 @@ reports a dollar figure routes through `cost_for_usage`.
 
 from __future__ import annotations
 
+import datetime as _dt
+
+# When the table below was last reconciled with Anthropic's public pricing.
+# Bump this (and the prices) whenever they change — `warn_if_stale` and the
+# self-test use it to nudge maintainers before estimates drift silently.
+PRICE_TABLE_DATE = _dt.date(2026, 6, 21)
+PRICE_TABLE_MAX_AGE_DAYS = 120
+
 # (input_per_mtok, output_per_mtok)
 PRICES = {
     "claude-fable-5": (10.0, 50.0),
@@ -66,6 +74,33 @@ def normalize(model: str | None) -> str:
 
 def is_priced(model: str | None) -> bool:
     return normalize(model) in PRICES
+
+
+def price_table_age_days(today: _dt.date | None = None) -> int:
+    """How many days old the bundled price table is."""
+    return ((today or _dt.date.today()) - PRICE_TABLE_DATE).days
+
+
+def is_price_table_stale(today: _dt.date | None = None) -> bool:
+    return price_table_age_days(today) > PRICE_TABLE_MAX_AGE_DAYS
+
+
+def warn_if_stale(stream=None) -> bool:
+    """Print a warning if the price table is older than the max age.
+
+    Returns True when a warning was emitted. Costs are still computed from the
+    bundled table — this only flags that the numbers may have drifted.
+    """
+    if not is_price_table_stale():
+        return False
+    import sys
+    age = price_table_age_days()
+    print(
+        f"  ⚠  Pricing data is {age} days old (last updated {PRICE_TABLE_DATE}). "
+        f"Cost estimates may be inaccurate — update claudestudio/pricing.py.",
+        file=stream or sys.stderr,
+    )
+    return True
 
 
 def family_of(model: str | None) -> str:

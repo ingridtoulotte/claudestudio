@@ -12,9 +12,10 @@ import os
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from . import api, index
+
 
 def _resolve_web_dir():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +44,32 @@ _CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 
+# Defence-in-depth headers sent with every response. The SPA loads its script and
+# styles from same-origin files but uses inline `style=` attributes and one inline
+# event handler, so 'unsafe-inline' is required for it to keep working; everything
+# else is locked to 'self'. `frame-ancestors 'none'` + X-Frame-Options stop the UI
+# being framed, and the page never talks to anything but its own origin.
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+# Hosts always accepted on the loopback interface. A request whose Host header is
+# anything else (e.g. a DNS-rebinding `evil.com` pointed at 127.0.0.1) is rejected.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "ClaudeStudio"
@@ -51,9 +78,56 @@ class Handler(BaseHTTPRequestHandler):
     # injected by make_server
     db_path: str = ""
     projects_root: str | None = None
+    bind_host: str = "127.0.0.1"
 
     def log_message(self, *_):  # silence default stderr access log
         pass
+
+    # -- security gates -----------------------------------------------------
+    def _host_ok(self) -> bool:
+        """Reject requests not addressed to this server's own interface.
+
+        Defeats DNS-rebinding: a malicious page that resolves its hostname to
+        127.0.0.1 still sends ``Host: attacker.example`` — which never matches.
+        When the operator has *explicitly* bound to a non-loopback host (an
+        opt-in, with a CLI warning), requests to that host are allowed too.
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        hostname = host.rsplit(":", 1)[0] if host.rsplit(":", 1)[-1].isdigit() else host
+        bind = (self.bind_host or "127.0.0.1").strip().lower()
+        # operator opted into a specific public host — accept it (+ loopback below)
+        if bind not in _LOOPBACK_HOSTS and bind not in ("", "0.0.0.0", "::") and hostname == bind:
+            return True
+        if bind in ("0.0.0.0", "::"):
+            # bound to every interface on purpose — host can't be pinned, so the
+            # loopback guard doesn't apply; the operator accepted LAN exposure.
+            return True
+        if hostname in _LOOPBACK_HOSTS:
+            return True
+        self.send_error(421, "Misdirected Request: bad Host header")
+        return False
+
+    def _csrf_ok(self) -> bool:
+        """Block cross-site state changes from a page in the user's browser.
+
+        Modern browsers attach ``Sec-Fetch-Site`` to every request; a forged
+        cross-origin POST/DELETE carries ``cross-site`` (or a non-loopback
+        ``Origin``). Same-origin app traffic and direct navigations pass, and
+        non-browser clients (no such headers) are unaffected — they could read
+        the local DB directly anyway, so they are not the threat model.
+        """
+        sfs = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if sfs and sfs not in ("same-origin", "none"):
+            self.send_error(403, "Forbidden: cross-site request blocked")
+            return False
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin and origin not in ("null",):
+            host = origin.split("://", 1)[-1]
+            hostname = host.rsplit(":", 1)[0] if host.rsplit(":", 1)[-1].isdigit() else host
+            if hostname not in _LOOPBACK_HOSTS and hostname != (self.bind_host or "").lower():
+                self.send_error(403, "Forbidden: cross-origin request blocked")
+                return False
+        return True
 
     # -- helpers ------------------------------------------------------------
     def _conn(self):
@@ -63,9 +137,14 @@ class Handler(BaseHTTPRequestHandler):
         # read endpoints skip the schema re-exec the writer path runs
         return index.connect_ro(self.db_path)
 
+    def _emit_security_headers(self):
+        for k, v in _SECURITY_HEADERS.items():
+            self.send_header(k, v)
+
     def _send_json(self, obj, status=200):
         payload = json.dumps(obj, default=str).encode("utf-8")
         self.send_response(status)
+        self._emit_security_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
@@ -74,6 +153,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_bytes(self, data, content_type, status=200):
         self.send_response(status)
+        self._emit_security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -82,6 +162,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_download(self, text, content_type, filename, status=200):
         data = text.encode("utf-8")
         self.send_response(status)
+        self._emit_security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -100,6 +181,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing ------------------------------------------------------------
     def do_GET(self):
+        if not self._host_ok():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
@@ -108,9 +191,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._serve_static(path)
 
     def do_POST(self):
+        # Drain the request body *before* the security gates so a rejected
+        # request still returns a clean response instead of resetting the socket
+        # (an unread body on a keep-alive connection aborts the client).
+        body = self._read_body()
+        if not self._host_ok() or not self._csrf_ok():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
-        body = self._read_body()
         try:
             conn = self._conn()
             try:
@@ -129,6 +217,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json({"error": "not found"}, status=404)
 
     def do_DELETE(self):
+        self._read_body()  # drain any body so a rejected request closes cleanly
+        if not self._host_ok() or not self._csrf_ok():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         try:
@@ -208,13 +299,13 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(db_path, projects_root=None, host="127.0.0.1", port=8787):
     Handler.db_path = db_path
     Handler.projects_root = projects_root
+    Handler.bind_host = host
     httpd = ThreadingHTTPServer((host, port), Handler)
     return httpd
 
 
 def serve(db_path, projects_root=None, host="127.0.0.1", port=8787, open_browser=True):
     # find a free port if the requested one is taken
-    import socket
     for candidate in [port, *range(port + 1, port + 25)]:
         try:
             httpd = make_server(db_path, projects_root, host, candidate)

@@ -150,6 +150,9 @@ button:focus-visible, a:focus-visible, .s-row:focus-visible,
 }
 .input:focus { border-color: var(--accent); }
 select.input { cursor: pointer; }
+.date-range { display: inline-flex; align-items: center; gap: 6px; }
+.date-range .date-sep { color: var(--text-3); font-size: 12px; }
+.input.date { padding: 7px 9px; font-size: 12px; color-scheme: dark; }
 .search-box { position: relative; flex: 1; min-width: 220px; }
 .search-box input { width: 100%; padding-left: 34px; }
 .search-box svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }

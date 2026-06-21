@@ -18,6 +18,21 @@ def test_list_sessions_query_filters_by_title(populated_db):
     assert api.list_sessions(conn, {"q": "zzz-not-present-zzz"})["total"] == 0
 
 
+def test_list_sessions_date_range_filter(populated_db):
+    conn, info = populated_db
+    sid = info["session_id"]
+    # The known fixture session is dated 2026-06-01. Month-margin bounds keep the
+    # assertions immune to the runner's local timezone offset.
+    assert api.list_sessions(conn, {"since": "2026-05-01"})["total"] == 1
+    assert api.list_sessions(conn, {"since": "2026-07-01"})["total"] == 0
+    assert api.list_sessions(conn, {"until": "2026-07-01"})["total"] == 1
+    assert api.list_sessions(conn, {"until": "2026-05-01"})["total"] == 0
+    win = api.list_sessions(conn, {"since": "2026-05-01", "until": "2026-07-01"})
+    assert win["total"] == 1 and win["sessions"][0]["session_id"] == sid
+    # garbage bounds are ignored, not fatal (same as search())
+    assert api.list_sessions(conn, {"since": "not-a-date"})["total"] == 1
+
+
 def test_get_session_builds_timeline_with_tools(populated_db):
     conn, info = populated_db
     detail = api.get_session(conn, info["session_id"])

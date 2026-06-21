@@ -16,7 +16,7 @@ Explore, search, replay, and understand every Claude Code session — all on you
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
-[Quickstart](#-quickstart) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [How it works](#-how-it-works) · [CLI](#-cli) · [Privacy](#-privacy--trust) · [FAQ](#-faq)
+[Highlights](#-highlights) · [Quickstart](#-quickstart) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [How it works](#-how-it-works) · [CLI](#-cli) · [Privacy](#-privacy--trust) · [FAQ](#-faq)
 
 <br/>
 
@@ -25,6 +25,18 @@ Explore, search, replay, and understand every Claude Code session — all on you
 <sub><i>Replay any session like a movie — prompt → thinking → tool calls → result, on a scrubable timeline.</i></sub>
 
 </div>
+
+---
+
+## ✨ Highlights
+
+- 🔒 **100% local, zero dependencies** — pure Python standard library. No `pip install`, no `node_modules`, no telemetry, no phone-home.
+- 🗂 **Browse every session** — fast, sortable, filterable list of every Claude Code conversation; star the keepers, archive the noise.
+- 🔎 **Search everything, instantly** — SQLite **FTS5 / BM25** full-text across every prompt, response, thinking block, and tool call, behind a <kbd>⌘K</kbd> / <kbd>Ctrl K</kbd> palette.
+- ⏯ **Replay sessions like a movie** — watch a conversation unfold on a scrubable timeline: prompt → thinking → tool calls → result.
+- ✦ **Ask your history** — grounded, deterministic local Q&A with deep-link citations. **Zero model calls, nothing uploaded, no API key.**
+- 📊 **Cost & usage analytics** — deterministic spend at public Anthropic prices (cache-aware), plus tokens, tools, and a weekday×hour heatmap.
+- 📤 **Export & share** — turn any session into clean Markdown or a single self-contained HTML page.
 
 ---
 

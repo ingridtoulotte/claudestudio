@@ -251,7 +251,7 @@ async function router() {
 
 // ---- view: sessions -------------------------------------------------------
 const SORTS = [['recent', 'Recent'], ['oldest', 'Oldest'], ['messages', 'Most messages'], ['tools', 'Most tools'], ['cost', 'Costliest'], ['tokens', 'Most tokens'], ['duration', 'Longest']];
-let sessionsState = { q: '', sort: 'recent', favorite: false, archived: 'exclude', offset: 0, limit: 50 };
+let sessionsState = { q: '', sort: 'recent', favorite: false, archived: 'exclude', since: '', until: '', offset: 0, limit: 50 };
 
 async function viewSessions(params) {
   if (params.project) sessionsState.project = params.project;
@@ -273,8 +273,11 @@ async function viewSessions(params) {
   const favChip = el('button', { class: 'chip toggle' + (sessionsState.favorite ? ' on' : '') }, ['★ Favorites']);
   const archChip = el('button', { class: 'chip toggle' + (sessionsState.archived === 'only' ? ' on' : '') }, ['Archived']);
   const saveBtn = el('button', { class: 'chip toggle', title: 'Save this filter as a smart collection' }, ['＋ Save search']);
+  const sinceInp = el('input', { class: 'input date', type: 'date', title: 'Active on/after this date', value: sessionsState.since || '' });
+  const untilInp = el('input', { class: 'input date', type: 'date', title: 'Started on/before this date', value: sessionsState.until || '' });
+  const dateWrap = el('div', { class: 'date-range', title: 'Filter by date' }, [sinceInp, el('span', { class: 'date-sep', text: '→' }), untilInp]);
 
-  const toolbar = el('div', { class: 'toolbar' }, [searchBox, sortSel, favChip, archChip, saveBtn]);
+  const toolbar = el('div', { class: 'toolbar' }, [searchBox, sortSel, favChip, archChip, dateWrap, saveBtn]);
   root.appendChild(toolbar);
   const savedWrap = el('div', { class: 'saved-row' });
   root.appendChild(savedWrap);
@@ -298,6 +301,8 @@ async function viewSessions(params) {
     sessionsState.sort = it.sort || 'recent';
     sessionsState.favorite = !!f.favorite;
     sessionsState.archived = f.archived || 'exclude';
+    sessionsState.since = f.since || '';
+    sessionsState.until = f.until || '';
     if (f.project) sessionsState.project = f.project; else delete sessionsState.project;
     sessionsState.offset = 0;
     viewSessions({});
@@ -307,6 +312,8 @@ async function viewSessions(params) {
     if (!name) return;
     const filters = { favorite: sessionsState.favorite, archived: sessionsState.archived };
     if (sessionsState.project) filters.project = sessionsState.project;
+    if (sessionsState.since) filters.since = sessionsState.since;
+    if (sessionsState.until) filters.until = sessionsState.until;
     try { await API.addSaved({ name: name.trim(), query: sessionsState.q, sort: sessionsState.sort, filters }); toast('Search saved'); loadSaved(); }
     catch (e) { toast('Save failed: ' + e.message, 'err'); }
   });
@@ -317,6 +324,8 @@ async function viewSessions(params) {
   sortSel.addEventListener('change', (e) => { sessionsState.sort = e.target.value; sessionsState.offset = 0; load(); });
   favChip.addEventListener('click', () => { sessionsState.favorite = !sessionsState.favorite; favChip.classList.toggle('on'); sessionsState.offset = 0; load(); });
   archChip.addEventListener('click', () => { sessionsState.archived = sessionsState.archived === 'only' ? 'exclude' : 'only'; archChip.classList.toggle('on'); sessionsState.offset = 0; load(); });
+  sinceInp.addEventListener('change', (e) => { sessionsState.since = e.target.value; sessionsState.offset = 0; load(); });
+  untilInp.addEventListener('change', (e) => { sessionsState.until = e.target.value; sessionsState.offset = 0; load(); });
 
   async function load() {
     listWrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -324,10 +333,12 @@ async function viewSessions(params) {
     if (sessionsState.q) q.q = sessionsState.q;
     if (sessionsState.favorite) q.favorite = '1';
     if (sessionsState.project) q.project = sessionsState.project;
+    if (sessionsState.since) q.since = sessionsState.since;
+    if (sessionsState.until) q.until = sessionsState.until;
     const data = await API.sessions(q);
     listWrap.innerHTML = '';
     if (!data.sessions.length) {
-      const noFilter = !sessionsState.q && !sessionsState.favorite && !sessionsState.project && sessionsState.archived !== 'only';
+      const noFilter = !sessionsState.q && !sessionsState.favorite && !sessionsState.project && !sessionsState.since && !sessionsState.until && sessionsState.archived !== 'only';
       const firstRun = noFilter && (STATE.summary ? STATE.summary.sessions === 0 : true);
       if (firstRun) {
         listWrap.appendChild(el('div', { class: 'onboard' }, [

@@ -223,6 +223,10 @@ def cmd_list(args):
         params["project"] = args.project
     if args.model:
         params["model"] = args.model
+    if args.since:
+        params["since"] = args.since
+    if args.until:
+        params["until"] = args.until
     if args.favorite:
         params["favorite"] = "1"
     params["archived"] = args.archived
@@ -350,6 +354,8 @@ def build_parser():
     p.add_argument("-q", "--query", default=None, help="filter by full-text / title match")
     p.add_argument("--project", default=None, help="restrict to a project path")
     p.add_argument("--model", default=None, help="restrict to a model substring")
+    p.add_argument("--since", default=None, help="only sessions active on/after this date (YYYY-MM-DD)")
+    p.add_argument("--until", default=None, help="only sessions started on/before this date (YYYY-MM-DD)")
     p.add_argument("--sort", default="recent",
                    choices=sorted(api.SORT_COLUMNS.keys()), help="sort order (default: recent)")
     p.add_argument("--favorite", action="store_true", help="only favorited sessions")

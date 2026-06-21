@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Date-range filtering on the session list.** The Sessions view, the
+  `/api/sessions` endpoint, and `claudestudio list` now accept `since`/`until`
+  bounds (epoch or `YYYY-MM-DD`), matching the date filter `search` already had.
+  Overlap semantics: `since` keeps sessions still active on/after the bound,
+  `until` keeps sessions started on/before it. Backward-compatible — both
+  optional; unparseable values are ignored, not fatal.
+
 ## [0.4.0] - 2026-06-21
 
 ### Security

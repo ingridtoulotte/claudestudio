@@ -188,6 +188,14 @@ def run() -> int:
         c.eq(lst_q["total"], 1, "list filters by title query")
         lst_none = api.list_sessions(conn, {"q": "zzzznotpresentzzz"})
         c.eq(lst_none["total"], 0, "no false matches")
+        c.eq(api.list_sessions(conn, {"since": "2026-05-01"})["total"], 1,
+             "list since=past → keeps session")
+        c.eq(api.list_sessions(conn, {"since": "2026-07-01"})["total"], 0,
+             "list since=future → empty")
+        c.eq(api.list_sessions(conn, {"until": "2026-05-01"})["total"], 0,
+             "list until=past → empty")
+        c.eq(api.list_sessions(conn, {"until": "2026-07-01"})["total"], 1,
+             "list until=future → keeps session")
 
         # state round-trips and survives reindex
         api.set_state(conn, exp["session_id"], {"favorite": True, "tags": ["bug"]})

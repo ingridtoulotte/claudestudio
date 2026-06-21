@@ -88,6 +88,18 @@ def list_sessions(conn, params: dict) -> dict:
     if model:
         where.append("s.models LIKE ?")
         args.append(f"%{model}%")
+    # date-range filter on session activity, mirroring search()'s since/until.
+    # Overlap semantics: `since` keeps sessions still active on/after the bound
+    # (last_epoch >= since); `until` keeps sessions started on/before it
+    # (first_epoch <= until). Accepts epoch or YYYY-MM-DD via _as_epoch.
+    since = _as_epoch(params.get("since"))
+    until = _as_epoch(params.get("until"))
+    if since is not None:
+        where.append("s.last_epoch >= ?")
+        args.append(since)
+    if until is not None:
+        where.append("s.first_epoch <= ?")
+        args.append(until)
     if favorite == "1":
         where.append("u.favorite = 1")
     if archived == "only":

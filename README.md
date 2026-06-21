@@ -127,6 +127,10 @@ Every repo Claude has touched, grouped and ranked — sessions, messages, spend,
 ### 📈 Timeline
 Your whole history as activity over time — messages per day, spend per day, and a month-by-month breakdown.
 
+<div align="center">
+<img src="docs/screenshots/timeline.png" alt="Timeline view" width="92%" />
+</div>
+
 ### ⚖️ Compare sessions
 Put any two sessions side by side — messages, prompts, tool calls, tokens, cost, duration — with the winner highlighted per row.
 

@@ -266,6 +266,7 @@ ClaudeStudio is built for people who care where their data goes.
 - **No telemetry. No analytics. No phone-home.** Grep the source — there isn't a single outbound network call.
 - **No cloud, no account, no lock-in.** The index is a plain SQLite file at `~/.claudestudio/index.db`; delete it anytime and re-build in seconds.
 - **Open source & deterministic.** Pricing and aggregations are transparent and covered by an exact-assertion self-test.
+- **Responsible disclosure.** Found something? See the [security policy](SECURITY.md) — the attack surface is deliberately tiny, and the localhost server is hardened (0.4.0+).
 
 ---
 
@@ -282,7 +283,7 @@ ClaudeStudio is built for people who care where their data goes.
 - [ ] Smart highlights — auto-surface breakthroughs, fixes, and recurring patterns
 - [ ] Diff view inside replay (file-level evolution across a session)
 
-Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md).
+Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).
 
 ---
 

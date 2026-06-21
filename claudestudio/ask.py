@@ -444,7 +444,11 @@ def important_tools(conn, sid: str, limit: int = 8) -> dict:
         if paths:
             label += " · " + _basename(paths[0])
         elif isinstance(inp.get("command"), str):
-            label += " · " + inp["command"].strip().splitlines()[0][:60]
+            # a blank / whitespace-only command has no first line — guard the
+            # [0] (an empty `command` would otherwise crash this endpoint).
+            first = (inp["command"].strip().splitlines() or [""])[0]
+            if first:
+                label += " · " + first[:60]
         scored.append((weight, r["seq"], label, bool(r["is_error"])))
     scored.sort(key=lambda x: (-x[0], x[1]))
     items = [{"text": lbl + ("  ⚠ error" if err else ""), "seq": seq, "session_id": sid}

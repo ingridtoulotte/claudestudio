@@ -220,17 +220,21 @@ python -m claudestudio [command]
   (no command)   build the index if needed, then launch the app
   serve          launch the desktop app          --port --host --no-browser
   index          scan & (incrementally) index     --force
+  list           list sessions (filter & sort)    -q --project --model --since --sort
+  search         full-text search (BM25)          --kind --project --since --json
+  ask            grounded Q&A over your history   --session --json
   export         export a session to Markdown/HTML --format md|html --out FILE
   wrapped        print your Claude Wrapped         --year YYYY
   stats          headline numbers
   doctor         diagnose environment & index health
   demo           generate synthetic data & explore --count N --serve
-  --selftest     run the built-in correctness suite (70 checks, no deps)
+  --selftest     run the built-in correctness suite (154 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
 
 ```bash
+python -m claudestudio ask "what should I reopen next?"   # grounded, no model calls
 python -m claudestudio doctor      # is everything wired up?
 python -m claudestudio wrapped     # your year in review, in the terminal
 python -m claudestudio stats       # quick totals

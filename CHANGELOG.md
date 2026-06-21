@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Hardened static-file path containment.** The web server's directory-traversal
+  guard now folds path separators before normalising (so a backslash segment
+  can't survive `normpath` on POSIX and reconstitute a `../`) and checks
+  containment with `realpath` + `commonpath` instead of a string `startswith`
+  (so a sibling whose name shares a prefix — e.g. `web` vs `web_secrets` — is no
+  longer treated as inside the web root). Added regression tests.
+
 ### Added
 - **Date-range filtering on the session list.** The Sessions view, the
   `/api/sessions` endpoint, and `claudestudio list` now accept `since`/`until`

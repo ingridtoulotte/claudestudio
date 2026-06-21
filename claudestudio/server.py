@@ -33,6 +33,35 @@ def _resolve_web_dir():
 
 WEB_DIR = _resolve_web_dir()
 
+
+def _is_within(base: str, target: str) -> bool:
+    """True iff `target` is `base` itself or a path inside it.
+
+    Uses ``realpath`` (so a symlink can't tunnel out) and ``commonpath`` (so a
+    sibling whose name merely shares a prefix — ``web`` vs ``web_secrets`` —
+    is not mistaken for containment the way a string ``startswith`` would).
+    """
+    base_r = os.path.realpath(base)
+    target_r = os.path.realpath(target)
+    try:
+        return os.path.commonpath([base_r, target_r]) == base_r
+    except ValueError:
+        # different drives on Windows -> definitionally not contained
+        return False
+
+
+def _resolve_static(web_dir: str, url_path: str) -> str | None:
+    """Map a request path to an absolute file under `web_dir`, or None if it escapes.
+
+    Separators are folded to ``/`` *before* normalising so a backslash segment
+    can't survive ``normpath`` on POSIX (where ``\\`` is not a separator) and
+    reconstitute a ``../`` traversal after the replace. Containment is then a
+    real path check, never a string prefix.
+    """
+    rel = os.path.normpath(url_path.replace("\\", "/")).lstrip("/\\").replace("\\", "/")
+    full = os.path.join(web_dir, rel)
+    return full if _is_within(web_dir, full) else None
+
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -280,10 +309,8 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_static(self, path):
         if path in ("/", ""):
             path = "/index.html"
-        safe = os.path.normpath(path).lstrip("/\\").replace("\\", "/")
-        full = os.path.join(WEB_DIR, safe)
-        # contain within WEB_DIR
-        if not os.path.abspath(full).startswith(os.path.abspath(WEB_DIR)):
+        full = _resolve_static(WEB_DIR, path)
+        if full is None:
             return self._send_bytes(b"forbidden", "text/plain", 403)
         if not os.path.isfile(full):
             # SPA fallback

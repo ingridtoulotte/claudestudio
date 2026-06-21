@@ -14,7 +14,8 @@ import sqlite3
 import tempfile
 
 import claudestudio
-from . import api, analytics, ask, cli, export, fixtures, index, parser, pricing, wrapped
+
+from . import analytics, api, ask, cli, export, fixtures, index, parser, pricing, wrapped
 
 
 class Check:
@@ -57,6 +58,13 @@ def run() -> int:
     c.close(pricing.cost_for_usage("claude-opus-4-8", 0, 0, 1_000_000, 0), 6.25, "cache write 1.25x")
     c.close(pricing.cost_for_usage("claude-opus-4-8", 0, 0, 0, 1_000_000), 0.5, "cache read 0.10x")
     c.close(pricing.cost_for_usage("claude-zzz", 1_000_000, 1_000_000), 0.0, "unknown model = $0")
+    # pricing table staleness signalling
+    import datetime as _dts
+    c.eq(pricing.price_table_age_days(pricing.PRICE_TABLE_DATE), 0, "price age 0 on table date")
+    c.ok(not pricing.is_price_table_stale(), "bundled price table is fresh")
+    c.ok(pricing.is_price_table_stale(
+        pricing.PRICE_TABLE_DATE + _dts.timedelta(days=pricing.PRICE_TABLE_MAX_AGE_DAYS + 1)),
+        "price table goes stale past max age")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = os.path.join(tmp, "projects")
@@ -116,6 +124,25 @@ def run() -> int:
             wrote = False
         c.ok(not wrote, "connect_ro is read-only (writes rejected)")
         ro_conn.close()
+
+        # --- schema version + migration safety ---------------------------
+        c.eq(index.stored_schema_version(conn), index.SCHEMA_VERSION,
+             "schema version recorded in meta")
+        index.maybe_migrate(conn)  # idempotent — must not change anything
+        c.eq(index.stored_schema_version(conn), index.SCHEMA_VERSION,
+             "maybe_migrate is idempotent")
+        fut_db = os.path.join(tmp, "future.db")
+        fc = index.connect(fut_db)
+        fc.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
+                   (str(index.SCHEMA_VERSION + 99),))
+        fc.commit()
+        fc.close()
+        raised = False
+        try:
+            index.connect(fut_db)
+        except RuntimeError:
+            raised = True
+        c.ok(raised, "opening a newer-schema index raises a clear error")
 
         # --- api: detail + search + analytics ----------------------------
         detail = api.get_session(conn, exp["session_id"])
@@ -179,7 +206,7 @@ def run() -> int:
         c.ok(len(ana["heatmap"]) == 7 and len(ana["heatmap"][0]) == 24, "heatmap is 7x24")
 
         w = wrapped.generate(conn)
-        c.ok(any("Sessions" == card["label"] for card in w["cards"]), "wrapped has Sessions card")
+        c.ok(any(card["label"] == "Sessions" for card in w["cards"]), "wrapped has Sessions card")
         c.ok(2026 in w["available_years"], "wrapped knows 2026")
 
         # --- export: markdown + standalone html --------------------------

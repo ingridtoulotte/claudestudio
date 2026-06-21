@@ -44,7 +44,7 @@ def _is_empty(m: dict) -> bool:
     return not m.get("text") and not m.get("thinking") and not m.get("tools")
 
 
-def _arg_text(inp: dict) -> str:
+def _arg_text(inp: dict | None) -> str:
     parts = []
     for k, v in (inp or {}).items():
         sval = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)

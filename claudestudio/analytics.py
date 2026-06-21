@@ -7,7 +7,6 @@ beyond the query, so the same functions back the HTTP API, the CLI, and tests.
 from __future__ import annotations
 
 import datetime as dt
-import json
 import sqlite3
 
 from . import pricing

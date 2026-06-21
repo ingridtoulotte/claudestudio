@@ -10,11 +10,11 @@ Everything is seeded, so two runs produce byte-identical files.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import random
 import uuid
-import datetime as dt
 
 PROJECTS = [
     ("/home/dev/orbit-api", "main"),

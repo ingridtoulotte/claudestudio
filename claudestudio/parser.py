@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 from . import pricing
-
 
 # ---------------------------------------------------------------------------
 # data model
@@ -198,7 +198,7 @@ def parse_file(path: str) -> ParsedSession | None:
     # tool_use_id -> ToolCall, so a later tool_result can attach its outcome.
     pending_tools: dict[str, ToolCall] = {}
 
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:

@@ -3,22 +3,59 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
+import pathlib
 import sys
 import textwrap
 import time
 
-from . import __version__, api, index, parser as _parser, server, wrapped, fixtures, selftest
+from . import __version__, api, fixtures, index, selftest, server, wrapped
+from . import parser as _parser
 
-BANNER = r"""
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def _warn_if_public_host(host: str) -> None:
+    """Warn loudly when the operator binds to anything but loopback.
+
+    ClaudeStudio is single-user and local-first; a non-loopback bind exposes the
+    full session history (prompts, code, tool output) to everyone on the network.
+    """
+    if (host or "").strip().lower() not in _LOOPBACK:
+        print(
+            f"  ⚠  WARNING: binding to {host!r} exposes your session history to "
+            f"your whole network.\n"
+            f"     Use the default 127.0.0.1 unless you specifically need remote "
+            f"access — and trust the network.",
+            file=sys.stderr,
+        )
+
+
+def _safe_out_path(out: str, default_name: str) -> pathlib.Path:
+    """Resolve a user-supplied --out into a concrete, contained file path.
+
+    `default_name` is a server-side slug with no path separators. If `out` names
+    a directory the export lands inside it under that slug; otherwise `out` is
+    taken as the target file. The result is fully resolved so `..` segments are
+    collapsed rather than silently followed.
+    """
+    if os.sep in default_name or (os.altsep and os.altsep in default_name):
+        raise ValueError(f"unsafe export filename: {default_name!r}")
+    base = pathlib.Path(out).expanduser() if out else pathlib.Path(default_name)
+    if out and (base.is_dir() or out.endswith(("/", os.sep))):
+        base = base / default_name
+    return base.resolve()
+
+BANNER = rf"""
    ___ _                _      ___ _            _ _
   / __| |__ _ _  _ __| |___ / __| |_ _  _ __| (_)___
  | (__| / _` | || / _` / -_)\__ \  _| || / _` | / _ \
   \___|_\__,_|\_,_\__,_\___||___/\__|\_,_\__,_|_\___/
-  the desktop workspace for Claude Code  ·  v%s
-""" % __version__
+  the desktop workspace for Claude Code  ·  v{__version__}
+"""
 
 
 def _add_common(p):
@@ -62,6 +99,7 @@ def cmd_serve(args):
         print()
         conn.close()
     print(BANNER)
+    _warn_if_public_host(args.host)
     server.serve(args.db, args.root, host=args.host, port=args.port,
                  open_browser=not args.no_browser)
     return 0
@@ -86,7 +124,8 @@ def cmd_export(args):
     if args.out == "-":
         sys.stdout.write(out["text"])
         return 0
-    dest = args.out or out["filename"]
+    dest = _safe_out_path(args.out, out["filename"])
+    dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as fh:
         fh.write(out["text"])
     print(f"  exported → {dest}  ({len(out['text']):,} bytes)")
@@ -110,6 +149,10 @@ def cmd_doctor(args):
     except sqlite3.OperationalError:
         print("  sqlite FTS5   : MISSING ✗ (search will be degraded)")
     print(f"  python        : {sys.version.split()[0]}")
+    from . import pricing
+    age = pricing.price_table_age_days()
+    flag = "STALE ⚠" if pricing.is_price_table_stale() else "ok ✓"
+    print(f"  pricing data  : {flag} (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
     if os.path.exists(args.db):
         conn = index.connect(args.db)
         s = index.session_summary(conn)
@@ -143,17 +186,16 @@ def cmd_demo(args):
     fixtures.build_corpus(demo_root, count=args.count, seed=args.seed)
     # fresh db each time
     if os.path.exists(demo_db):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(demo_db)
-        except OSError:
-            pass
     conn = index.connect(demo_db)
-    stats = index.reindex(conn, demo_root, force=True, progress=_progress)
+    index.reindex(conn, demo_root, force=True, progress=_progress)
     print()
     s = index.session_summary(conn)
     print(f"  demo index → {s['sessions']} sessions · {s['messages']:,} messages · ${s['cost_usd']:,.2f}")
     conn.close()
     if args.serve:
+        _warn_if_public_host(args.host)
         server.serve(demo_db, demo_root, host=args.host, port=args.port,
                      open_browser=not args.no_browser)
     else:
@@ -368,10 +410,8 @@ def build_parser():
 def _force_utf8():
     # Windows consoles default to cp1252 and choke on the progress bar / emoji.
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, ValueError):
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
 
 
 def main(argv=None) -> int:

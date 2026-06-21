@@ -236,8 +236,8 @@ python -m claudestudio [command]
   (no command)   build the index if needed, then launch the app
   serve          launch the desktop app          --port --host --no-browser
   index          scan & (incrementally) index     --force
-  list           list sessions (filter & sort)    -q --project --model --since --sort
-  search         full-text search (BM25)          --kind --project --since --json
+  list           list sessions (filter & sort)    -q --project --model --since/--until --sort
+  search         full-text search (BM25)          --kind --project --since/--until --json
   ask            grounded Q&A over your history   --session --json
   export         export a session to Markdown/HTML --format md|html --out FILE
   wrapped        print your Claude Wrapped         --year YYYY

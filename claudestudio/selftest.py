@@ -231,6 +231,11 @@ def run() -> int:
         w = wrapped.generate(conn)
         c.ok(any(card["label"] == "Sessions" for card in w["cards"]), "wrapped has Sessions card")
         c.ok(2026 in w["available_years"], "wrapped knows 2026")
+        # an unrepresentable year (>= datetime.MAXYEAR) must fall back to all-time,
+        # never crash the wrapped endpoint with an OSError/ValueError -> HTTP 500.
+        wy = api.wrapped_payload(conn, "9999")
+        c.eq(wy["label"], "All time", "wrapped out-of-range year falls back to all-time")
+        c.ok(wy["year"] is None, "wrapped out-of-range year normalized to None")
 
         # --- export: markdown + standalone html --------------------------
         md = api.export_session(conn, exp["session_id"], "md")

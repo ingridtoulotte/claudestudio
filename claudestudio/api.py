@@ -52,8 +52,8 @@ def list_sessions(conn, params: dict) -> dict:
         order = "ASC"
     favorite = params.get("favorite")
     archived = params.get("archived", "exclude")
-    limit = min(int(params.get("limit", 60) or 60), 500)
-    offset = int(params.get("offset", 0) or 0)
+    limit = _int_param(params.get("limit"), 60, lo=1, hi=500)
+    offset = _int_param(params.get("offset"), 0, lo=0)
 
     sort_col = SORT_COLUMNS.get(sort, "last_epoch")
     where = ["1=1"]
@@ -190,7 +190,7 @@ def search(conn, params: dict) -> dict:
       * since/until — message time window (epoch seconds or YYYY-MM-DD)
     """
     q = (params.get("q") or "").strip()
-    limit = min(int(params.get("limit", 40) or 40), 200)
+    limit = _int_param(params.get("limit"), 40, lo=1, hi=200)
     if not q:
         return {"results": [], "query": q}
 
@@ -372,6 +372,28 @@ def _fts_query(q: str) -> str:
     return " ".join(quoted)
 
 
+def _int_param(v, default, *, lo=0, hi=None):
+    """Coerce an HTTP query param to a bounded int, never raising.
+
+    Query-string values arrive as raw text straight from ``parse_qs``, so a
+    stray ``?limit=abc`` (or even an empty ``?limit=``) must not reach ``int()``
+    unguarded — it would raise ``ValueError`` and surface as an HTTP 500 with a
+    leaked Python message instead of a clean result. Missing or non-numeric
+    values fall back to ``default``; a numeric value is clamped to ``[lo, hi]``
+    so a negative page size (``?limit=-1``) can't bypass the cap — SQLite treats
+    a negative ``LIMIT`` as unbounded and would dump the whole table.
+    """
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    if lo is not None:
+        n = max(lo, n)
+    if hi is not None:
+        n = min(hi, n)
+    return n
+
+
 def _as_epoch(v, *, end_of_day=False):
     """Coerce a filter value to epoch seconds. Accepts a float/epoch string or a
     plain date (YYYY-MM-DD[ HH:MM]). Returns None when absent or unparseable.
@@ -410,7 +432,7 @@ def _as_epoch(v, *, end_of_day=False):
 def summary(conn): return index.session_summary(conn)
 def analytics_payload(conn): return analytics.overview(conn)
 def projects_payload(conn): return {"projects": analytics.projects(conn)}
-def wrapped_payload(conn, year=None): return wrapped.generate(conn, year)
+def wrapped_payload(conn, year=None): return wrapped.generate(conn, _int_param(year, None))
 
 
 def ask(conn, question, session=None) -> dict:

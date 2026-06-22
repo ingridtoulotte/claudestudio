@@ -154,6 +154,22 @@ def test_wrapped_payload_tolerates_bad_year(populated_db):
     assert api.wrapped_payload(conn, "2026") is not None
 
 
+def test_wrapped_payload_tolerates_out_of_range_year(populated_db):
+    # Regression: `_int_param` clamps year to lo=0 but has no upper bound, so a
+    # numeric-but-huge ?year used to reach dt.datetime(year+1, ...) and crash —
+    # year=9999 raised OSError (Windows mktime), year>=10000 raised ValueError
+    # (year out of range) — surfacing as an HTTP 500 with a leaked message.
+    conn, _ = populated_db
+    for bad in ("9999", "10000", "999999999"):
+        payload = api.wrapped_payload(conn, bad)
+        assert payload is not None, bad
+        # out-of-range falls back to the all-time view, like ?year=abc
+        assert payload["label"] == "All time", bad
+        assert payload["year"] is None, bad
+    # a representable year is still honoured
+    assert api.wrapped_payload(conn, "2026")["label"] == "2026"
+
+
 def test_export_filename_has_no_path_separators(populated_db):
     # The slug that becomes the download filename must never contain a separator,
     # so it can't redirect a write outside the intended directory.

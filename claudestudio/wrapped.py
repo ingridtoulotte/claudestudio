@@ -14,16 +14,38 @@ def _fmt_int(n: float) -> str:
     return f"{int(n):,}"
 
 
+def _year_bounds(year: int) -> tuple[float, float] | None:
+    """Epoch ``[start, end)`` for a calendar year, or None if it can't be built.
+
+    The exclusive upper bound needs ``year + 1``, so ``year >= datetime.MAXYEAR``
+    (9999) overflows the calendar; and on some platforms ``.timestamp()`` raises
+    ``OSError``/``OverflowError`` for a year far outside the local epoch range
+    (Windows mktime tops out near 9999). Either way we return None so the caller
+    falls back to the all-time view instead of surfacing an HTTP 500 (with a
+    leaked Python message) or a raw ``claudestudio wrapped --year`` traceback.
+    """
+    try:
+        start = dt.datetime(year, 1, 1).timestamp()
+        end = dt.datetime(year + 1, 1, 1).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+    return start, end
+
+
 def generate(conn: sqlite3.Connection, year: int | None = None) -> dict:
     where = ""
     params: tuple = ()
     label = "All time"
-    if year:
-        start = dt.datetime(year, 1, 1).timestamp()
-        end = dt.datetime(year + 1, 1, 1).timestamp()
+    bounds = _year_bounds(year) if year else None
+    if bounds:
+        start, end = bounds
         where = "WHERE last_epoch >= ? AND last_epoch < ?"
         params = (start, end)
         label = str(year)
+    else:
+        # absent, zero, or an unrepresentable year -> all-time (year=None) so the
+        # returned `year` field and behaviour match the documented `?year=abc` case.
+        year = None
 
     totals = conn.execute(
         f"""SELECT COUNT(*) sessions,

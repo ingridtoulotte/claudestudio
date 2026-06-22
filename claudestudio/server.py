@@ -278,8 +278,9 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/projects":
                     return self._send_json(api.projects_payload(conn))
                 if path == "/api/wrapped":
-                    year = params.get("year")
-                    return self._send_json(api.wrapped_payload(conn, int(year) if year else None))
+                    # year is coerced inside wrapped_payload so a bad ?year=abc
+                    # returns the all-time view instead of crashing the handler.
+                    return self._send_json(api.wrapped_payload(conn, params.get("year")))
                 if path == "/api/compare":
                     return self._send_json(api.compare(conn, params.get("a", ""), params.get("b", "")))
                 if path == "/api/ask":

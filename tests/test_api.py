@@ -112,6 +112,48 @@ def test_export_session_markdown_and_html(populated_db):
     assert "<!doctype html>" in html["text"].lower()
 
 
+def test_int_param_coerces_clamps_and_never_raises():
+    # Bad/missing values fall back to the default instead of raising.
+    assert api._int_param("abc", 60) == 60
+    assert api._int_param("", 60) == 60
+    assert api._int_param(None, 60) == 60
+    # A negative page size must clamp to the floor, not pass through — a raw
+    # `LIMIT -1` is unbounded in SQLite and would dump the whole table.
+    assert api._int_param("-1", 40, lo=1, hi=200) == 1
+    # Over-cap values clamp to the ceiling; in-range values pass through.
+    assert api._int_param("9999", 40, lo=1, hi=200) == 200
+    assert api._int_param("25", 40, lo=1, hi=200) == 25
+    # Missing default may itself be None (used for the optional `year` param).
+    assert api._int_param("nope", None) is None
+
+
+def test_list_sessions_bad_pagination_is_safe(populated_db):
+    # Regression: query-string limit/offset arrive as raw text, so non-numeric
+    # values used to crash list_sessions (HTTP 500). They must degrade to the
+    # defaults and still return the fixture.
+    conn, info = populated_db
+    sid = info["session_id"]
+    assert api.list_sessions(conn, {"limit": "abc"})["sessions"][0]["session_id"] == sid
+    assert api.list_sessions(conn, {"limit": ""})["total"] == 1
+    assert api.list_sessions(conn, {"offset": "abc"})["total"] == 1
+    # negative limit no longer bypasses the cap (it clamps, never goes unbounded)
+    res = api.list_sessions(conn, {"limit": "-1"})
+    assert res["limit"] >= 1 and len(res["sessions"]) == 1
+
+
+def test_search_bad_limit_is_safe(populated_db):
+    conn, _ = populated_db
+    res = api.search(conn, {"q": "parser", "limit": "abc"})
+    assert len(res["results"]) >= 1
+
+
+def test_wrapped_payload_tolerates_bad_year(populated_db):
+    # ?year=abc must yield the all-time view, not a 500.
+    conn, _ = populated_db
+    assert api.wrapped_payload(conn, "abc") is not None
+    assert api.wrapped_payload(conn, "2026") is not None
+
+
 def test_export_filename_has_no_path_separators(populated_db):
     # The slug that becomes the download filename must never contain a separator,
     # so it can't redirect a write outside the intended directory.

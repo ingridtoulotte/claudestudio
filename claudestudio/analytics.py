@@ -6,16 +6,9 @@ beyond the query, so the same functions back the HTTP API, the CLI, and tests.
 
 from __future__ import annotations
 
-import datetime as dt
 import sqlite3
 
-from . import pricing
-
-
-def _day(epoch: float) -> str:
-    if not epoch:
-        return "1970-01-01"
-    return dt.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d")
+from . import parser, pricing
 
 
 def overview(conn: sqlite3.Connection) -> dict:
@@ -96,7 +89,10 @@ def daily_activity(conn) -> list[dict]:
     ).fetchall()
     buckets: dict[str, dict] = {}
     for r in rows:
-        day = _day(r["last_epoch"])
+        d = parser.local_datetime(r["last_epoch"])
+        if d is None:  # corrupt / far-future epoch: leave it off the time chart
+            continue
+        day = d.strftime("%Y-%m-%d")
         b = buckets.setdefault(
             day, {"date": day, "sessions": 0, "messages": 0, "cost_usd": 0.0, "tool_calls": 0}
         )
@@ -111,7 +107,9 @@ def heatmap(conn) -> list[list[int]]:
     """7x24 grid (weekday x hour) of session activity."""
     grid = [[0] * 24 for _ in range(7)]
     for r in conn.execute("SELECT last_epoch FROM sessions WHERE last_epoch>0"):
-        d = dt.datetime.fromtimestamp(r["last_epoch"])
+        d = parser.local_datetime(r["last_epoch"])
+        if d is None:  # corrupt / far-future epoch: skip, don't crash the grid
+            continue
         grid[d.weekday()][d.hour] += 1
     return grid
 

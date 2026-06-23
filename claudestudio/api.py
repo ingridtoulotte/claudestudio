@@ -413,17 +413,23 @@ def _as_epoch(v, *, end_of_day=False):
         pass
     import datetime as _dt
     s = str(v)
+    # `.timestamp()` on a naive datetime goes through the platform's local-time
+    # conversion, which rejects instants outside the C library's range: on
+    # Windows a pre-epoch date (e.g. `1900-01-01`) or a far-future one raises
+    # OSError, and years beyond datetime's own range raise OverflowError. A
+    # parseable-but-unrepresentable bound is treated as "unparseable" and yields
+    # None (filter simply not applied) rather than escaping as an HTTP 500.
     try:  # date-only: optionally stretch to end of day for inclusive upper bounds
         d = _dt.datetime.strptime(s, "%Y-%m-%d")
         if end_of_day:
             d = d.replace(hour=23, minute=59, second=59, microsecond=999_999)
         return d.timestamp()
-    except ValueError:
+    except (ValueError, OSError, OverflowError):
         pass
     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
             return _dt.datetime.strptime(s, fmt).timestamp()
-        except ValueError:
+        except (ValueError, OSError, OverflowError):
             continue
     return None
 

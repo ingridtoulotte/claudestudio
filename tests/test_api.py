@@ -45,6 +45,35 @@ def test_as_epoch_until_covers_whole_day():
     assert api._as_epoch("1700000000", end_of_day=True) == 1700000000.0
 
 
+def test_as_epoch_out_of_range_dates_never_raise():
+    # Regression: `_as_epoch` parses a YYYY-MM-DD bound with strptime, then calls
+    # `.timestamp()` — which routes through the platform's local-time conversion.
+    # On Windows a pre-epoch date (1900-01-01) or a far-future one makes that
+    # conversion raise OSError (and years beyond datetime's range OverflowError),
+    # which used to escape `except ValueError` and surface as an HTTP 500 on
+    # ?since=/?until=. The cross-platform contract is simply: never raise, always
+    # return float | None (POSIX represents these dates fine and returns a float;
+    # Windows can't and falls back to None — both are acceptable, a crash is not).
+    for bad in ("1900-01-01", "1969-12-31", "9999-12-31"):
+        assert api._as_epoch(bad) is None or isinstance(api._as_epoch(bad), float), bad
+        assert (
+            api._as_epoch(bad, end_of_day=True) is None
+            or isinstance(api._as_epoch(bad, end_of_day=True), float)
+        ), bad
+    # a representable date still resolves to an epoch on every platform
+    assert isinstance(api._as_epoch("2026-06-01"), float)
+
+
+def test_date_range_filters_tolerate_out_of_range_bounds(populated_db):
+    # The endpoints that accept since/until must not 500 on an unrepresentable
+    # bound — the bound is simply dropped, so the fixture still comes back.
+    conn, _ = populated_db
+    assert api.list_sessions(conn, {"since": "1900-01-01"})["total"] == 1
+    assert api.list_sessions(conn, {"until": "9999-12-31"})["total"] == 1
+    assert len(api.search(conn, {"q": "parser", "since": "1900-01-01"})["results"]) >= 1
+    assert len(api.search(conn, {"q": "parser", "until": "9999-12-31"})["results"]) >= 1
+
+
 def test_list_until_includes_the_selected_end_day(populated_db):
     # Regression: picking the session's own day as the `until` bound must keep it.
     # Bound dates are derived from the stored epoch in *local* time so the check

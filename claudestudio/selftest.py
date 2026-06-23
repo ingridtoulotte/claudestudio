@@ -237,6 +237,33 @@ def run() -> int:
         c.eq(wy["label"], "All time", "wrapped out-of-range year falls back to all-time")
         c.ok(wy["year"] is None, "wrapped out-of-range year normalized to None")
 
+        # A session whose timestamp parses to a far-future instant (valid ISO-8601
+        # up to year 9999, or a corrupt millisecond value read as seconds) stores
+        # an epoch past `fromtimestamp`'s range -> OSError on Windows, and a silent
+        # year-9999 bucket on POSIX. The time-bucketed views must skip it on every
+        # OS: never crash, never show an absurd year. Insert, assert, then remove.
+        _far = _dt.datetime(9999, 12, 31, tzinfo=_dt.timezone.utc).timestamp()
+        conn.execute(
+            "INSERT INTO sessions(session_id,project,last_epoch,first_epoch,"
+            "msg_count,tool_calls,cost_usd,input_tokens,output_tokens,"
+            "cache_write,cache_read,duration_s) "
+            "VALUES('__far__','/x',?,?,1,0,0,0,0,0,0,0)", (_far, _far))
+        try:
+            a2 = analytics.overview(conn)
+            c.eq(a2["sessions"], 2, "far-future row still counted in SQL totals")
+            c.ok(all(not d["date"].startswith("9999") for d in a2["daily"]),
+                 "far-future epoch excluded from daily chart on every OS")
+            c.eq(sum(sum(row) for row in a2["heatmap"]), 1,
+                 "far-future epoch excluded from heatmap on every OS")
+            w2 = wrapped.generate(conn)
+            c.ok(any(card["label"] == "Sessions" for card in w2["cards"]),
+                 "wrapped survives a far-future epoch")
+            c.ok(9999 not in wrapped.available_years(conn),
+                 "available_years drops the far-future epoch on every OS")
+        finally:
+            conn.execute("DELETE FROM sessions WHERE session_id='__far__'")
+            conn.commit()
+
         # --- export: markdown + standalone html --------------------------
         md = api.export_session(conn, exp["session_id"], "md")
         c.ok(md is not None, "export_session returns markdown")

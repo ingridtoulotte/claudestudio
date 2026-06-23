@@ -14,6 +14,7 @@ Record types seen in the wild:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 from collections.abc import Iterable
@@ -149,6 +150,41 @@ def _parse_ts(ts: str | None) -> float | None:
     try:
         return _dt.datetime.fromisoformat(s).timestamp()
     except (ValueError, OSError):
+        return None
+
+
+# Upper bound for a *representable* session time. `_parse_ts` happily accepts any
+# ISO-8601 instant up to year 9999 (via tz-aware `.timestamp()`, which never
+# raises), and a corrupt log can carry a millisecond value mistaken for seconds —
+# both land centuries past any genuine Claude Code session. Feeding such an epoch
+# to `datetime.fromtimestamp` raises OSError on Windows, while POSIX silently
+# accepts it and skews timelines differently per OS. Bounding to a fixed window
+# (computed tz-aware, so the constant itself is platform-independent) keeps the
+# analytics / Wrapped views identical everywhere and never crashes.
+_MAX_LOCAL_EPOCH = _dt.datetime(2100, 1, 1, tzinfo=_dt.timezone.utc).timestamp()
+
+
+def local_datetime(epoch: float | int | str | None) -> _dt.datetime | None:
+    """Stored epoch seconds -> naive *local* datetime, or None if unusable.
+
+    Use for any view that buckets sessions by wall-clock time (daily charts,
+    hour/weekday heatmaps, Wrapped). Returns None for a missing, non-numeric, or
+    out-of-range epoch so the caller skips that one row instead of crashing the
+    whole aggregation. SQL-level totals (counts, token/cost sums) are unaffected,
+    only the time-bucketed breakdowns drop the corrupt row.
+    """
+    try:
+        e = float(epoch)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    # `<= 0` covers the "no timestamp" sentinel (0) and pre-epoch values, which
+    # `fromtimestamp` rejects on Windows in negative-UTC zones — exclude them on
+    # every OS so the result is deterministic, not timezone-dependent.
+    if not 0.0 < e <= _MAX_LOCAL_EPOCH:
+        return None
+    try:
+        return _dt.datetime.fromtimestamp(e)
+    except (ValueError, OSError, OverflowError):
         return None
 
 

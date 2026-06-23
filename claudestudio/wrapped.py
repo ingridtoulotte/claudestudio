@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 
+from . import parser
+
 
 def _fmt_int(n: float) -> str:
     return f"{int(n):,}"
@@ -95,8 +97,8 @@ def generate(conn: sqlite3.Connection, year: int | None = None) -> dict:
         f"SELECT last_epoch FROM sessions {where}" if where
         else "SELECT last_epoch FROM sessions", params if where else ()
     ):
-        if r["last_epoch"]:
-            d = dt.datetime.fromtimestamp(r["last_epoch"])
+        d = parser.local_datetime(r["last_epoch"])
+        if d is not None:  # skip corrupt / far-future epochs (else OSError on Windows)
             hours[d.hour] += 1
             weekdays[d.weekday()] += 1
     peak_hour = max(range(24), key=lambda h: hours[h]) if any(hours) else 0
@@ -148,7 +150,9 @@ def generate(conn: sqlite3.Connection, year: int | None = None) -> dict:
 def available_years(conn) -> list[int]:
     years = set()
     for r in conn.execute("SELECT last_epoch FROM sessions WHERE last_epoch>0"):
-        years.add(dt.datetime.fromtimestamp(r["last_epoch"]).year)
+        d = parser.local_datetime(r["last_epoch"])
+        if d is not None:  # ignore corrupt / far-future epochs
+            years.add(d.year)
     return sorted(years, reverse=True)
 
 

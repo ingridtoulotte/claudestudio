@@ -45,17 +45,22 @@ def test_as_epoch_until_covers_whole_day():
     assert api._as_epoch("1700000000", end_of_day=True) == 1700000000.0
 
 
-def test_as_epoch_out_of_range_dates_return_none():
+def test_as_epoch_out_of_range_dates_never_raise():
     # Regression: `_as_epoch` parses a YYYY-MM-DD bound with strptime, then calls
     # `.timestamp()` — which routes through the platform's local-time conversion.
     # On Windows a pre-epoch date (1900-01-01) or a far-future one makes that
     # conversion raise OSError (and years beyond datetime's range OverflowError),
     # which used to escape `except ValueError` and surface as an HTTP 500 on
-    # ?since=/?until=. An unrepresentable bound must degrade to None instead.
+    # ?since=/?until=. The cross-platform contract is simply: never raise, always
+    # return float | None (POSIX represents these dates fine and returns a float;
+    # Windows can't and falls back to None — both are acceptable, a crash is not).
     for bad in ("1900-01-01", "1969-12-31", "9999-12-31"):
-        assert api._as_epoch(bad) is None, bad
-        assert api._as_epoch(bad, end_of_day=True) is None, bad
-    # a representable date still resolves to an epoch
+        assert api._as_epoch(bad) is None or isinstance(api._as_epoch(bad), float), bad
+        assert (
+            api._as_epoch(bad, end_of_day=True) is None
+            or isinstance(api._as_epoch(bad, end_of_day=True), float)
+        ), bad
+    # a representable date still resolves to an epoch on every platform
     assert isinstance(api._as_epoch("2026-06-01"), float)
 
 

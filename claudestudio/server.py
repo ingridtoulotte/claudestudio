@@ -299,6 +299,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.analytics_payload(conn))
                 if path == "/api/projects":
                     return self._send_json(api.projects_payload(conn))
+                if path == "/api/tools/stats":
+                    return self._send_json(api.tools_payload(conn))
+                if path == "/api/graph":
+                    return self._send_json(api.graph_payload(conn, params))
+                if path == "/api/highlights":
+                    return self._send_json(api.highlights_payload(conn))
                 if path == "/api/wrapped":
                     # year is coerced inside wrapped_payload so a bad ?year=abc
                     # returns the all-time view instead of crashing the handler.
@@ -309,6 +315,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.ask(conn, params.get("q", ""), params.get("session") or None))
                 if path == "/api/saved":
                     return self._send_json({"saved": api.list_saved(conn)})
+                if path.startswith("/api/session/") and path.endswith("/similar"):
+                    sid = path[len("/api/session/"):-len("/similar")]
+                    return self._send_json(api.similar_sessions(conn, sid, params.get("limit", 5)))
                 if path.startswith("/api/session/") and "/export" in path:
                     rest = path[len("/api/session/"):]
                     sid, _, suffix = rest.partition("/export")

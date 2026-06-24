@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import math
 import os
 import sqlite3
@@ -408,6 +409,205 @@ def run() -> int:
         c.ok(qn["n"] <= 6, f"reopen avoids N+1 ({qn['n']} SQL stmts for 12 sessions)")
 
         conn2.close()
+
+        # --- v0.5.0: tool stats / graph / similarity / find-by-file ------
+        # A crafted index gives every detector a deterministic, known input.
+        from . import highlights, mcp
+
+        def _mk_session(conn, sid, **kw):
+            cols = {
+                "session_id": sid, "title": "", "project": "/p", "project_name": "p",
+                "git_branch": "", "version": "", "first_ts": "", "last_ts": "",
+                "first_epoch": 0.0, "last_epoch": 0.0, "duration_s": 0.0,
+                "msg_count": 0, "user_msgs": 0, "assistant_msgs": 0, "tool_calls": 0,
+                "models": "[]", "primary_model": "", "input_tokens": 0,
+                "output_tokens": 0, "cache_write": 0, "cache_read": 0,
+                "cost_usd": 0.0, "file_path": "", "preview": "",
+            }
+            cols.update(kw)
+            keys = ",".join(cols)
+            ph = ",".join("?" * len(cols))
+            conn.execute(f"INSERT OR REPLACE INTO sessions({keys}) VALUES({ph})",
+                         list(cols.values()))
+            conn.execute("INSERT OR IGNORE INTO user_state(session_id) VALUES(?)", (sid,))
+
+        def _mk_tool(conn, sid, name, *, is_error=0, inp=None, seq=0):
+            conn.execute(
+                "INSERT INTO tool_calls(session_id,message_uuid,seq,name,ts,is_error,"
+                "input_json,result_preview) VALUES(?,?,?,?,?,?,?,?)",
+                (sid, f"{sid}:{seq}", seq, name, "", is_error,
+                 json.dumps(inp or {}), ""),
+            )
+
+        def _mk_msg(conn, sid, text, *, seq=0):
+            conn.execute(
+                "INSERT INTO messages(uuid,session_id,role,seq,text) VALUES(?,?,?,?,?)",
+                (f"{sid}:{seq}", sid, "user", seq, text),
+            )
+
+        hdb = os.path.join(tmp, "hl.db")
+        hconn = index.connect(hdb)
+        _far_day = 1_770_000_000.0  # a fixed, representable epoch (same local day reused)
+
+        # marathon + breakthrough: long session that recovered after tool errors
+        _mk_session(hconn, "mara", title="Big refactor", duration_s=7200,
+                    msg_count=200, cost_usd=0.5, last_epoch=_far_day,
+                    primary_model="claude-opus-4-8", preview="refactor the parser module end to end")
+        for i in range(2):
+            _mk_tool(hconn, "mara", "Bash", is_error=1, seq=i)
+        _mk_tool(hconn, "mara", "Edit", is_error=0,
+                 inp={"file_path": "/p/core/engine.py"}, seq=2)
+        _mk_tool(hconn, "mara", "Edit", is_error=0,
+                 inp={"file_path": "/p/core/engine.py"}, seq=3)
+
+        # cost spike: one session far above the mean
+        for i in range(5):
+            _mk_session(hconn, f"cheap{i}", cost_usd=0.05, msg_count=10,
+                        last_epoch=_far_day, primary_model="claude-haiku-4-5")
+        _mk_session(hconn, "spike", title="Marathon debug", cost_usd=50.0,
+                    msg_count=80, last_epoch=_far_day, primary_model="claude-opus-4-8")
+
+        # abandoned: tiny sessions
+        _mk_session(hconn, "ab1", msg_count=1, last_epoch=_far_day)
+        _mk_session(hconn, "ab2", msg_count=2, last_epoch=_far_day)
+
+        # recurring prompts: two near-identical openers (>60% trigram overlap)
+        _mk_session(hconn, "rec1", preview="run the tests and fix all the failing tests one by one",
+                    msg_count=12, last_epoch=_far_day)
+        _mk_session(hconn, "rec2", preview="run the tests and fix all the failing tests one by one now",
+                    msg_count=12, last_epoch=_far_day)
+
+        # similarity: rec1/rec2 share prompt words; unrelated does not
+        _mk_msg(hconn, "rec1", "run the tests and fix all the failing assertions in the parser")
+        _mk_msg(hconn, "rec2", "run the tests and fix all the failing assertions in the parser quickly")
+        _mk_msg(hconn, "spike", "design a brand new billing dashboard with charts and exports")
+        # most-edited file appears across sessions for revisited-files
+        _mk_tool(hconn, "rec1", "Edit", inp={"file_path": "/p/core/engine.py"}, seq=0)
+        _mk_tool(hconn, "rec2", "Read", inp={"file_path": "/p/core/engine.py"}, seq=0)
+        hconn.commit()
+
+        # tools_stats
+        tstats = api.tools_stats(hconn)
+        names = {t["name"]: t for t in tstats["leaderboard"]}
+        c.ok("Edit" in names and "Bash" in names, "tools_stats leaderboard lists used tools")
+        c.eq(names["Bash"]["errors"], 2, "tools_stats counts Bash errors")
+        c.close(names["Bash"]["success_rate"], 0.0, "tools_stats Bash success_rate = 0")
+        c.ok(any(f["file"] == "engine.py" for f in tstats["most_edited_files"]),
+             "tools_stats surfaces the most-edited file")
+        c.ok(tstats["total_calls"] >= 6, "tools_stats total_calls aggregates")
+        c.ok(tstats["distinct_tools"] >= 2, "tools_stats counts distinct tools")
+
+        # graph
+        g = api.graph(hconn, {})
+        ids = {n["id"]: n for n in g["nodes"]}
+        c.ok("s:mara" in ids and ids["s:mara"]["type"] == "session", "graph has a session node")
+        c.ok(any(n["type"] == "project" for n in g["nodes"]), "graph has a project node")
+        c.ok(any(n["type"] == "file" and n["label"] == "engine.py" for n in g["nodes"]),
+             "graph has the edited file node")
+        c.ok(g["stats"]["edges"] == len(g["edges"]), "graph stats.edges matches edge list")
+        c.ok({"source": "s:mara", "target": "f:engine.py", "rel": "touched"} in g["edges"],
+             "graph links session → file it touched")
+        gp = api.graph(hconn, {"project": "nope"})
+        c.eq(gp["stats"]["session"], 0, "graph project filter excludes non-matches")
+
+        # similarity
+        sim = api.similar_sessions(hconn, "rec1", 3)
+        c.ok(sim["similar"], "similar_sessions returns ranked neighbours")
+        c.eq(sim["similar"][0]["session_id"], "rec2", "similar_sessions ranks the near-duplicate first")
+        c.ok(sim["similar"][0]["score"] > 0.3, "similar_sessions score is meaningful")
+        c.eq(api.similar_sessions(hconn, "does-not-exist")["similar"], [],
+             "similar_sessions on unknown id → empty")
+
+        # find sessions by file
+        byf = api.sessions_by_file(hconn, "engine.py")
+        found = {s["session_id"] for s in byf["sessions"]}
+        c.ok({"mara", "rec1", "rec2"} <= found, "sessions_by_file finds every toucher")
+        c.eq(api.sessions_by_file(hconn, "")["sessions"], [], "sessions_by_file empty path → []")
+        # LIKE wildcards in the needle are matched literally, never as patterns
+        c.eq(api.sessions_by_file(hconn, "%.py")["sessions"], [],
+             "sessions_by_file escapes LIKE wildcards (no pattern injection)")
+
+        # --- v0.5.0: highlights ------------------------------------------
+        h = highlights.generate(hconn)
+        c.ok(any(x["session_id"] == "spike" for x in h["cost_spikes"]),
+             "highlights flags the cost spike")
+        c.ok(any(x["session_id"] == "mara" for x in h["marathons"]),
+             "highlights flags the marathon session")
+        c.ok(any(x["session_id"] == "mara" for x in h["breakthroughs"]),
+             "highlights detects the error→recovery breakthrough")
+        c.ok({x["session_id"] for x in h["abandoned"]} >= {"ab1", "ab2"},
+             "highlights flags abandoned sessions")
+        c.ok(any(x.get("file") == "engine.py" for x in h["revisited_files"]),
+             "highlights flags the revisited file")
+        c.ok(any({p["a"], p["b"]} == {"rec1", "rec2"} for p in h["recurring_prompts"]),
+             "highlights detects the recurring prompt pair")
+        c.ok(any("claude-opus-4-8" in m["models"] for m in h["model_migrations"]),
+             "highlights detects the day with multiple models")
+
+        # --- v0.5.0: MCP server (JSON-RPC 2.0 dispatch) ------------------
+        def _rpc(req):
+            return mcp.handle_request(hdb, req)
+
+        init = _rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        c.eq(init["result"]["protocolVersion"], mcp.PROTOCOL_VERSION, "mcp initialize returns protocol version")
+        c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
+             "mcp serverInfo carries the package version")
+        tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        c.eq(len(tl["result"]["tools"]), 8, "mcp exposes 8 tools")
+        c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
+        # notification (no id) gets no response
+        c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
+             "mcp notification yields no response")
+        # unknown method / bad params / unknown tool
+        c.eq(_rpc({"jsonrpc": "2.0", "id": 3, "method": "nope"})["error"]["code"],
+             mcp.METHOD_NOT_FOUND, "mcp unknown method → -32601")
+        c.eq(_rpc({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {}})["error"]["code"],
+             mcp.INVALID_PARAMS, "mcp tools/call without name → -32602")
+        unk = _rpc({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                    "params": {"name": "ghost", "arguments": {}}})
+        c.ok(unk["result"]["isError"], "mcp unknown tool → isError result")
+
+        def _call(name, arguments):
+            r = _rpc({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                      "params": {"name": name, "arguments": arguments}})
+            return json.loads(r["result"]["content"][0]["text"]), r["result"]["isError"]
+
+        sr, err = _call("search_sessions", {"query": "refactor", "limit": 5})
+        c.ok(not err and any(s["session_id"] == "mara" for s in sr["sessions"]),
+             "mcp search_sessions finds a session")
+        gs, err = _call("get_session", {"session_id": "mara"})
+        c.ok(not err and gs["session_id"] == "mara" and "by_tool" in gs, "mcp get_session returns detail")
+        miss, err = _call("get_session", {"session_id": "ghost"})
+        c.ok(err and "error" in miss, "mcp get_session unknown id → isError")
+        an, err = _call("get_analytics_summary", {"days": 30})
+        c.ok(not err and an["all_time"]["sessions"] >= 1 and an["window"]["days"] == 30,
+             "mcp get_analytics_summary returns all-time + window")
+        bf, err = _call("find_sessions_by_file", {"file_path": "engine.py"})
+        c.ok(not err and any(s["session_id"] == "mara" for s in bf["sessions"]),
+             "mcp find_sessions_by_file works")
+        rs, err = _call("get_recent_sessions", {"limit": 3})
+        c.ok(not err and len(rs["sessions"]) >= 1, "mcp get_recent_sessions works")
+        ann, err = _call("get_session_annotations", {"session_id": "mara"})
+        c.ok(not err and ann["annotations"] == [], "mcp get_session_annotations empty when no note")
+        ps, err = _call("get_project_stats", {"project_name": "p"})
+        c.ok(not err and ps.get("sessions", 0) >= 1, "mcp get_project_stats aggregates the project")
+        ah, err = _call("ask_history", {"question": "what should I reopen next?"})
+        c.ok(not err and ah.get("intent") in ("reopen", "search", "help"), "mcp ask_history routes a question")
+
+        # a stored note is surfaced as an annotation
+        api.set_state(hconn, "mara", {"notes": "remember to add a migration"})
+        ann2, _ = _call("get_session_annotations", {"session_id": "mara"})
+        c.ok(ann2["annotations"] and "migration" in ann2["annotations"][0]["body"],
+             "mcp get_session_annotations surfaces a stored note")
+
+        # --- v0.5.0: JSON export -----------------------------------------
+        jx = api.export_session(hconn, "rec1", "json")
+        c.ok(jx is not None and jx["filename"].endswith(".json"), "json export has .json filename")
+        c.ok(jx["content_type"].startswith("application/json"), "json export content type")
+        parsed = json.loads(jx["text"])
+        c.eq(parsed["session_id"], "rec1", "json export round-trips the session id")
+        c.ok("timeline" in parsed, "json export includes the timeline")
+        hconn.close()
 
     # --- web assets: guard the SPA wiring the UI behaviors depend on ------
     # The behaviors themselves are JS/CSS (exercised in a browser), but these

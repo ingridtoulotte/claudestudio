@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
+ClaudeStudio becomes a first-class part of your Claude Code toolchain: it can now
+be queried by Claude Code itself over MCP, and it surfaces deeper, deterministic
+intelligence about how you actually work — all still local-first, zero-dependency,
+and covered by an expanded self-test (161 → 209 checks).
+
+### Added
+- **MCP server (`claudestudio mcp`).** A JSON-RPC 2.0 server over stdio that
+  exposes your indexed history to any MCP client, Claude Code included. Eight
+  read-only tools — `search_sessions`, `get_session`, `get_session_annotations`,
+  `get_project_stats`, `get_analytics_summary`, `find_sessions_by_file`,
+  `get_recent_sessions`, `ask_history` — each reusing the existing query layer.
+  No new dependencies, no model or network calls. New `claudestudio-mcp` entry
+  point and a setup guide in [`docs/MCP.md`](docs/MCP.md).
+- **Tool-usage intelligence (`GET /api/tools/stats`).** A tool leaderboard with
+  per-tool success rates, tool×project breakdown, most-edited files, and a
+  tool co-occurrence matrix — all computed from the existing index.
+- **Smart Highlights engine (`GET /api/highlights`, `claudestudio highlights`).**
+  Deterministic heuristics surface breakthrough moments (error chain → clean
+  result), cost spikes, marathon sessions, most-revisited files, recurring prompts
+  (trigram Jaccard), abandoned sessions, and model-migration days.
+- **Knowledge graph (`GET /api/graph`).** Nodes (sessions, projects, files) and
+  edges (belongs-to, touched) for a connected view of your work, bounded and
+  filterable by project.
+- **Session similarity (`GET /api/session/{id}/similar`).** Finds related sessions
+  by prompt content using TF-IDF cosine similarity, computed entirely in stdlib.
+- **`find_sessions_by_file`** lookup: which sessions touched a given file.
+- **JSON export** (`claudestudio export <id> --format json`) for piping a full
+  session into other tooling.
+- **`cs` short alias** for the `claudestudio` command.
+- **`doctor`** now reports the MCP tool count and the on-disk schema version.
+
+### Fixed
+- **`index.connect` no longer leaks an open SQLite handle** when it rejects a
+  newer-schema index. The connection is closed before the error propagates, so the
+  index file can be removed or rebuilt afterwards (previously the dangling handle
+  blocked deletion on Windows).
+
+### Changed
+- `pyproject.toml`: version `0.5.0`, expanded keywords/classifiers, and the new
+  `cs` / `claudestudio-mcp` console scripts.
+- Self-test expanded from 161 to 209 assertions, covering every new subsystem
+  (tool stats, graph, similarity, highlights, JSON export, and full MCP dispatch).
+
 ## [0.4.1] - 2026-06-24
 
 ### Security

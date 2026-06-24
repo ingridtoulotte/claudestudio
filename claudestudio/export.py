@@ -245,9 +245,21 @@ def to_html(session: dict) -> str:
 """
 
 
+def to_json(session: dict) -> str:
+    """Structured JSON of the full session (metadata + timeline).
+
+    Useful for piping a session into other tooling or diffing two runs. Drops the
+    redundant per-tool ``input_json`` mirror the API already parses into ``input``.
+    """
+    s = dict(session)
+    return json.dumps(s, default=str, ensure_ascii=False, indent=2)
+
+
 def render(session: dict, fmt: str) -> tuple[str, str]:
-    """Return (text, content_type) for fmt in {'md','markdown','html'}."""
+    """Return (text, content_type) for fmt in {'md','markdown','html','json'}."""
     f = (fmt or "md").lower().lstrip(".")
     if f in ("html", "htm"):
         return to_html(session), "text/html; charset=utf-8"
+    if f == "json":
+        return to_json(session), "application/json; charset=utf-8"
     return to_markdown(session), "text/markdown; charset=utf-8"

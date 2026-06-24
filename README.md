@@ -36,7 +36,20 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - ⏯ **Replay sessions like a movie** — watch a conversation unfold on a scrubable timeline: prompt → thinking → tool calls → result.
 - ✦ **Ask your history** — grounded, deterministic local Q&A with deep-link citations. **Zero model calls, nothing uploaded, no API key.**
 - 📊 **Cost & usage analytics** — deterministic spend at public Anthropic prices (cache-aware), plus tokens, tools, and a weekday×hour heatmap.
-- 📤 **Export & share** — turn any session into clean Markdown or a single self-contained HTML page.
+- 📤 **Export & share** — turn any session into clean Markdown, JSON, or a single self-contained HTML page.
+- 🔌 **MCP server** — `claudestudio mcp` lets **Claude Code query your own history**: search sessions, pull a session, ask grounded questions. Zero model calls. *(new in v0.5.0)*
+- ✦ **Smart highlights & knowledge graph** — deterministic heuristics surface breakthroughs, cost spikes, marathons, and recurring prompts; a session×project×file graph shows your work as a connected web. *(new in v0.5.0)*
+
+---
+
+## 🆕 What's new in v0.5.0
+
+- **MCP server** — make ClaudeStudio queryable by Claude Code itself over the Model Context Protocol (8 read-only tools, stdio JSON-RPC, zero deps). See [`docs/MCP.md`](docs/MCP.md).
+- **Tool-usage dashboard API** — leaderboard, per-tool success rates, co-occurrence matrix, most-edited files (`/api/tools/stats`).
+- **Smart Highlights** — `claudestudio highlights` and `/api/highlights`.
+- **Knowledge graph** (`/api/graph`) and **session similarity** (`/api/session/{id}/similar`, TF-IDF).
+- **JSON export** and a short **`cs`** command alias.
+- Architecture reference: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Self-test grew 161 → **209** checks.
 
 ---
 

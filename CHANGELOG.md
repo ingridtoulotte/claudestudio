@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-24
+
 ### Security
 - **Hardened request-body parsing against a malformed `Content-Length`.** The
   POST/DELETE handlers drain the request body *before* the security gates, so a
@@ -38,6 +40,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   today as the end date returned nothing for today's sessions. The upper bound now
   stretches to the day's last instant. `since` was already correct (midnight keeps
   the whole start day); raw epochs and values with an explicit time are unchanged.
+- **Time-bucketed views no longer crash on an out-of-range epoch.** A session
+  whose timestamp parses to a far-future instant (valid ISO-8601 up to year 9999,
+  or a corrupt millisecond value read as seconds) fed `datetime.fromtimestamp`
+  an epoch past its range — raising `OSError` on Windows and silently bucketing
+  into year 9999 on POSIX. The daily chart, hour/weekday heatmap, Wrapped, and
+  `available_years` now route every epoch through a shared bounded helper that
+  drops the corrupt row identically on every OS; SQL totals are unaffected.
+- **Date-range filter bounds tolerate unrepresentable dates.** `?since=1900-01-01`
+  (pre-epoch) or a far-future bound made `_as_epoch`'s `.timestamp()` raise
+  `OSError`/`OverflowError` on Windows, escaping as an HTTP 500 with a leaked
+  Python message. An unrepresentable bound is now treated as "not applied"
+  (returns `None`) on every platform.
+- **`wrapped` falls back to all-time for an unrepresentable year.** `?year=9999`
+  (or `claudestudio wrapped --year 9999`) overflowed the calendar math —
+  `OSError` on Windows, `ValueError` past `datetime.MAXYEAR` — surfacing as an
+  HTTP 500 or a raw CLI traceback. An out-of-range year now resolves to the
+  all-time view, matching the existing `?year=abc` behaviour.
+- **Pagination params guarded against malformed input.** `?limit=abc` / empty
+  `?limit=` raised `ValueError` → HTTP 500, and `?limit=-1` reached SQLite as an
+  *unbounded* `LIMIT` (cap bypass, full-table dump). `limit`/`offset`/`year` now
+  pass through a single coercer that falls back to the default on bad input and
+  clamps the value to a safe range.
+- **`ask` no longer crashes on a blank tool command.** A `Bash`/`PowerShell`
+  tool call with an empty or whitespace-only `command` made `important_tools`
+  index an empty `splitlines()`, raising `IndexError` and 500-ing `/api/ask`.
+  The empty first line is now guarded and skipped.
 
 ## [0.4.0] - 2026-06-21
 

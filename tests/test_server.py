@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -136,3 +137,54 @@ def test_non_browser_post_still_works(live):
         body={"archived": False},
     )
     assert status == 200
+
+
+def _raw_first_line(port, request_bytes, timeout=4):
+    """Hand-build a request over a raw socket (urllib won't forge Content-Length).
+
+    Returns the response's first line as text, or None if the connection was
+    reset / timed out before any response arrived — the pre-fix failure modes
+    (a handler crash resets the socket; a negative length hangs on read()).
+    """
+    s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    try:
+        s.sendall(request_bytes)
+        chunk = s.recv(4096)
+    except (socket.timeout, ConnectionError, OSError):
+        return None
+    finally:
+        s.close()
+    if not chunk:
+        return None
+    return chunk.split(b"\r\n", 1)[0].decode("latin-1")
+
+
+def test_non_numeric_content_length_gets_clean_response(live):
+    # A malformed Content-Length is parsed before the security gates; it must not
+    # crash the handler and reset the socket — the client still gets a real HTTP
+    # status line instead of a connection abort.
+    _, port = live
+    line = _raw_first_line(
+        port,
+        b"POST /api/state/x HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\nSec-Fetch-Site: same-origin\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: abc\r\n\r\n{}",
+    )
+    assert line is not None, "server reset the connection instead of responding"
+    assert line.startswith("HTTP/1.1"), line
+
+
+def test_negative_content_length_does_not_hang(live):
+    # A negative Content-Length must not send rfile.read() to EOF (a hang on a
+    # keep-alive connection); the server responds promptly with a real status.
+    _, port = live
+    line = _raw_first_line(
+        port,
+        b"POST /api/state/x HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\nSec-Fetch-Site: same-origin\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: -1\r\n\r\n",
+    )
+    assert line is not None, "server hung or reset instead of responding"
+    assert line.startswith("HTTP/1.1"), line

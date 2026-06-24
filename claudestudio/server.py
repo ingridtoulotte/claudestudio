@@ -200,8 +200,30 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _read_body(self):
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        if not length:
+        """Parse a JSON request body, robust to a malformed Content-Length.
+
+        ``Content-Length`` is attacker-controllable raw text. A non-numeric value
+        would crash ``int()`` — and since the POST/DELETE handlers drain the body
+        *before* the security gates, that crash escapes the handler and resets the
+        socket instead of returning a clean response (defeating the very reason
+        the drain runs first). A negative value would send ``rfile.read(-1)`` to
+        EOF, blocking the worker on a keep-alive connection (a hang). In both
+        cases the framing is untrustworthy, so the body can't be drained
+        reliably: return an empty body and close the connection rather than read
+        the leftover bytes as the next request.
+        """
+        raw = (self.headers.get("Content-Length") or "").strip()
+        if not raw:
+            return {}
+        try:
+            length = int(raw)
+        except ValueError:
+            self.close_connection = True
+            return {}
+        if length < 0:
+            self.close_connection = True
+            return {}
+        if length == 0:
             return {}
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))

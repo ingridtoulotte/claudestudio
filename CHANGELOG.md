@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **Hardened request-body parsing against a malformed `Content-Length`.** The
+  POST/DELETE handlers drain the request body *before* the security gates, so a
+  non-numeric `Content-Length` crashed `int()` and reset the socket instead of
+  returning a clean response, and a negative value sent `rfile.read(-1)` to EOF —
+  hanging the worker on a keep-alive connection (a DoS vector). The parser now
+  treats any non-positive or non-numeric length as "no body" and closes the
+  connection (the framing is untrustworthy), so a hostile or buggy client gets a
+  clean HTTP response and the server never crashes or hangs. Added regression tests.
 - **Hardened static-file path containment.** The web server's directory-traversal
   guard now folds path separators before normalising (so a backslash segment
   can't survive `normpath` on POSIX and reconstitute a `../`) and checks

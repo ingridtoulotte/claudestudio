@@ -357,7 +357,12 @@ def export_session(conn, session_id: str, fmt: str) -> dict | None:
     if detail is None:
         return None
     text, content_type = export.render(detail, fmt)
-    ext = "html" if content_type.startswith("text/html") else "md"
+    if content_type.startswith("text/html"):
+        ext = "html"
+    elif content_type.startswith("application/json"):
+        ext = "json"
+    else:
+        ext = "md"
     filename = f"{_slug(detail.get('title'), session_id[:8] or 'session')}.{ext}"
     return {"text": text, "content_type": content_type, "filename": filename}
 
@@ -434,11 +439,319 @@ def _as_epoch(v, *, end_of_day=False):
     return None
 
 
+# ---------------------------------------------------------------------------
+# tool-usage intelligence  (backs the Tools dashboard + the MCP server)
+# ---------------------------------------------------------------------------
+
+def tools_stats(conn) -> dict:
+    """Aggregate tool-call intelligence, computed entirely from the index.
+
+    Everything here is a pure read — no new storage. Returns a dict the Tools
+    dashboard renders as hand-drawn SVG and the MCP server can hand back to a
+    client verbatim.
+    """
+    from . import ask as ask_engine
+
+    leaderboard = []
+    for r in conn.execute(
+        # SAFE: parameterized (no user input in this query)
+        """SELECT name, COUNT(*) calls, COALESCE(SUM(is_error),0) errors
+           FROM tool_calls GROUP BY name ORDER BY calls DESC"""
+    ):
+        calls = r["calls"] or 0
+        errors = r["errors"] or 0
+        leaderboard.append({
+            "name": r["name"], "calls": calls, "errors": errors,
+            "success_rate": round((calls - errors) / calls, 4) if calls else 1.0,
+        })
+
+    by_project = [
+        dict(r) for r in conn.execute(
+            # SAFE: parameterized
+            """SELECT s.project_name AS project, t.name AS tool, COUNT(*) calls
+               FROM tool_calls t JOIN sessions s USING(session_id)
+               GROUP BY s.project_name, t.name
+               ORDER BY calls DESC LIMIT 400"""
+        )
+    ]
+
+    # Most-edited files: parse the file path out of each edit-tool call's input.
+    file_counts: dict[str, dict] = {}
+    for r in conn.execute(
+        # SAFE: parameterized
+        "SELECT name, input_json FROM tool_calls WHERE name IN "
+        "('Edit','Write','MultiEdit','NotebookEdit','Update')"
+    ):
+        try:
+            inp = json.loads(r["input_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        for p in ask_engine.paths_in_tool(r["name"], inp):
+            base = p.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            ent = file_counts.setdefault(base, {"file": base, "edits": 0})
+            ent["edits"] += 1
+    most_edited = sorted(file_counts.values(), key=lambda d: (-d["edits"], d["file"]))[:20]
+
+    # Co-occurrence: how often a pair of tools shows up in the same session.
+    pair_counts: dict[tuple, int] = {}
+    sess_tools: dict[str, set] = {}
+    for r in conn.execute("SELECT session_id, name FROM tool_calls"):
+        sess_tools.setdefault(r["session_id"], set()).add(r["name"])
+    for names in sess_tools.values():
+        ordered = sorted(names)
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                pair_counts[(ordered[i], ordered[j])] = pair_counts.get((ordered[i], ordered[j]), 0) + 1
+    co_occurrence = [
+        {"a": a, "b": b, "sessions": n}
+        for (a, b), n in sorted(pair_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:25]
+    ]
+
+    totals = conn.execute(
+        "SELECT COUNT(*) calls, COALESCE(SUM(is_error),0) errors FROM tool_calls"
+    ).fetchone()
+    return {
+        "leaderboard": leaderboard,
+        "by_project": by_project,
+        "most_edited_files": most_edited,
+        "co_occurrence": co_occurrence,
+        "total_calls": totals["calls"] or 0,
+        "total_errors": totals["errors"] or 0,
+        "distinct_tools": len(leaderboard),
+    }
+
+
+def sessions_by_file(conn, file_path: str, limit=20) -> dict:
+    """Sessions whose tool calls referenced a file path (by basename, forgiving).
+
+    Used by the MCP `find_sessions_by_file` tool and the knowledge graph. Matches
+    on the file's basename so an absolute path and a relative one to the same file
+    both hit. Returns lightweight session summaries.
+    """
+    raw = (file_path or "").strip()
+    if not raw:
+        return {"file": raw, "sessions": []}
+    base = raw.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    limit = _int_param(limit, 20, lo=1, hi=200)
+    rows = conn.execute(
+        # SAFE: parameterized — the LIKE needle is bound, never interpolated
+        """SELECT DISTINCT s.session_id, s.title, s.project_name, s.last_epoch,
+                  s.msg_count, s.cost_usd
+           FROM tool_calls t JOIN sessions s USING(session_id)
+           WHERE t.input_json LIKE ? ESCAPE '\\'
+           ORDER BY s.last_epoch DESC, s.session_id ASC LIMIT ?""",
+        (f"%{_like_escape(base)}%", limit),
+    ).fetchall()
+    return {"file": base, "sessions": [dict(r) for r in rows]}
+
+
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so a user-supplied needle is matched literally."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# ---------------------------------------------------------------------------
+# session similarity  (TF-IDF cosine, pure stdlib)
+# ---------------------------------------------------------------------------
+
+_STOPWORD_TEXT = (
+    "the a an and or but if then else for to of in on at by with from is are was "
+    "were be been being this that these those it its as i you we they he she them "
+    "do does did doing have has had not no yes can could should would will just "
+    "what which who when where why how all any some more most other into out up "
+    "down over under again than too very s t can't don't"
+)
+_STOPWORDS = frozenset(_STOPWORD_TEXT.split())
+_TOK_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,}")
+
+
+def _tokenize(text: str) -> list[str]:
+    return [w for w in (t.lower() for t in _TOK_RE.findall(text or ""))
+            if w not in _STOPWORDS and len(w) > 2]
+
+
+def _session_bags(conn) -> dict:
+    """Per-session token frequency bag, from title + user-prompt text."""
+    import collections
+    bags: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for r in conn.execute("SELECT session_id, title FROM sessions"):
+        bags[r["session_id"]].update(_tokenize(r["title"] or ""))
+    for r in conn.execute(
+        "SELECT session_id, text FROM messages WHERE role='user' AND text<>''"
+    ):
+        bags[r["session_id"]].update(_tokenize(r["text"] or ""))
+    return bags
+
+
+def similar_sessions(conn, session_id: str, limit=5) -> dict:
+    """Find sessions most similar to `session_id` by prompt content (TF-IDF cosine).
+
+    Pure Python over the index — no model, deterministic. Returns ranked sessions
+    with a 0..1 similarity score; an unknown id or an empty corpus yields [].
+    """
+    import math
+
+    limit = _int_param(limit, 5, lo=1, hi=50)
+    bags = _session_bags(conn)
+    if session_id not in bags or not bags[session_id]:
+        return {"session_id": session_id, "similar": []}
+
+    n = len(bags)
+    df: dict[str, int] = {}
+    for bag in bags.values():
+        for term in bag:
+            df[term] = df.get(term, 0) + 1
+
+    def vec(bag):
+        out = {}
+        for term, tf in bag.items():
+            idf = math.log((n + 1) / (df[term] + 1)) + 1.0
+            out[term] = tf * idf
+        return out
+
+    def cosine(a, b):
+        if not a or not b:
+            return 0.0
+        common = set(a) & set(b)
+        dot = sum(a[t] * b[t] for t in common)
+        na = math.sqrt(sum(v * v for v in a.values()))
+        nb = math.sqrt(sum(v * v for v in b.values()))
+        return dot / (na * nb) if na and nb else 0.0
+
+    target = vec(bags[session_id])
+    scored = []
+    for sid, bag in bags.items():
+        if sid == session_id:
+            continue
+        score = cosine(target, vec(bag))
+        if score > 0:
+            scored.append((score, sid))
+    scored.sort(key=lambda kv: (-kv[0], kv[1]))
+    top = scored[:limit]
+    meta = {}
+    if top:
+        ids = [sid for _, sid in top]
+        ph = ",".join("?" * len(ids))
+        for r in conn.execute(
+            # SAFE: parameterized — placeholders bound to the ranked ids
+            f"SELECT session_id, title, project_name, last_epoch, msg_count, cost_usd "
+            f"FROM sessions WHERE session_id IN ({ph})", ids
+        ):
+            meta[r["session_id"]] = dict(r)
+    return {
+        "session_id": session_id,
+        "similar": [
+            {**meta.get(sid, {"session_id": sid}), "score": round(score, 4)}
+            for score, sid in top
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# knowledge graph  (session × project × file)
+# ---------------------------------------------------------------------------
+
+def graph(conn, params: dict | None = None) -> dict:
+    """Nodes + edges for the knowledge graph: sessions, projects, files.
+
+    Bounded for renderability: the most-recent `max_sessions` sessions, each
+    contributing up to a handful of file edges. Node ids are namespaced
+    (`s:`/`p:`/`f:`) so the force-directed layout can key on them directly.
+    """
+    from . import ask as ask_engine
+
+    params = params or {}
+    max_sessions = _int_param(params.get("max_sessions"), 120, lo=1, hi=500)
+    project = (params.get("project") or "").strip()
+
+    where = ""
+    args: list = [max_sessions]
+    if project:
+        where = "WHERE project = ? OR project_name = ?"
+        args = [project, project, max_sessions]
+    srows = conn.execute(
+        # SAFE: parameterized
+        f"""SELECT session_id, title, project, project_name, last_epoch,
+                   msg_count, tool_calls, cost_usd
+            FROM sessions {where}
+            ORDER BY last_epoch DESC, session_id ASC LIMIT ?""",
+        args,
+    ).fetchall()
+    session_ids = [r["session_id"] for r in srows]
+
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    for r in srows:
+        sid = r["session_id"]
+        nodes[f"s:{sid}"] = {
+            "id": f"s:{sid}", "type": "session", "label": (r["title"] or sid)[:48],
+            "session_id": sid, "msg_count": r["msg_count"], "cost_usd": r["cost_usd"],
+        }
+        pname = r["project_name"] or r["project"] or "(unknown)"
+        pid = f"p:{r['project'] or pname}"
+        if pid not in nodes:
+            nodes[pid] = {"id": pid, "type": "project", "label": pname[:32],
+                          "project": r["project"]}
+        edges.append({"source": f"s:{sid}", "target": pid, "rel": "in"})
+
+    # file edges from edit/read tool calls on the selected sessions
+    if session_ids:
+        ph = ",".join("?" * len(session_ids))
+        per_session: dict[str, set] = {}
+        for r in conn.execute(
+            # SAFE: parameterized
+            f"SELECT session_id, name, input_json FROM tool_calls "
+            f"WHERE session_id IN ({ph}) AND name IN "
+            f"('Edit','Write','MultiEdit','NotebookEdit','Update','Read','NotebookRead')",
+            session_ids,
+        ):
+            try:
+                inp = json.loads(r["input_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            files = per_session.setdefault(r["session_id"], set())
+            if len(files) >= 6:
+                continue
+            for p in ask_engine.paths_in_tool(r["name"], inp):
+                base = p.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                if not base:
+                    continue
+                fid = f"f:{base}"
+                if fid not in nodes:
+                    nodes[fid] = {"id": fid, "type": "file", "label": base[:40], "file": base}
+                files.add(base)
+                edges.append({"source": f"s:{r['session_id']}", "target": fid, "rel": "touched"})
+                if len(files) >= 6:
+                    break
+
+    # de-duplicate edges (a session can touch the same file via several calls)
+    seen = set()
+    uniq_edges = []
+    for e in edges:
+        key = (e["source"], e["target"], e["rel"])
+        if key not in seen:
+            seen.add(key)
+            uniq_edges.append(e)
+    counts = {"session": 0, "project": 0, "file": 0}
+    for nd in nodes.values():
+        counts[nd["type"]] += 1
+    return {
+        "nodes": list(nodes.values()),
+        "edges": uniq_edges,
+        "stats": {"nodes": len(nodes), "edges": len(uniq_edges), **counts},
+    }
+
+
 # convenience wrappers used by both server and CLI
 def summary(conn): return index.session_summary(conn)
 def analytics_payload(conn): return analytics.overview(conn)
 def projects_payload(conn): return {"projects": analytics.projects(conn)}
 def wrapped_payload(conn, year=None): return wrapped.generate(conn, _int_param(year, None))
+def tools_payload(conn): return tools_stats(conn)
+def graph_payload(conn, params=None): return graph(conn, params or {})
+def highlights_payload(conn):
+    from . import highlights
+    return highlights.generate(conn)
 
 
 def ask(conn, question, session=None) -> dict:

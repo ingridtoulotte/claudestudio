@@ -136,6 +136,56 @@ def cmd_export(args):
     return 0
 
 
+def cmd_mcp(args):
+    """Launch the MCP server (JSON-RPC 2.0 over stdio).
+
+    No banner / no stdout chatter — stdout is the JSON-RPC channel and any stray
+    print would corrupt the protocol stream.
+    """
+    from . import mcp
+    if not os.path.exists(args.db):
+        print("  No index yet — building one first…", file=sys.stderr)
+        conn = index.connect(args.db)
+        index.reindex(conn, args.root)
+        conn.close()
+    return mcp.serve_stdio(args.db)
+
+
+def cmd_highlights(args):
+    conn = index.connect(args.db)
+    from . import highlights
+    data = highlights.generate(conn)
+    conn.close()
+    if args.json:
+        print(json.dumps(data, default=str, indent=2))
+        return 0
+    print(BANNER)
+    labels = {
+        "breakthroughs": "✦ Breakthrough moments",
+        "cost_spikes": "⚡ Cost spikes",
+        "marathons": "🏃 Marathon sessions",
+        "revisited_files": "📌 Most revisited files",
+        "recurring_prompts": "🔁 Recurring prompts",
+        "abandoned": "🌱 Abandoned sessions",
+        "model_migrations": "🔀 Model migrations",
+    }
+    any_shown = False
+    for key, label in labels.items():
+        items = data.get(key) or []
+        if not items:
+            continue
+        any_shown = True
+        print(f"\n  {label}")
+        for it in items[:8]:
+            who = it.get("session_id") or it.get("file") or it.get("date") or ""
+            reason = it.get("reason", "")
+            title = (it.get("title") or "")[:40]
+            print(f"    {str(who)[:36]:<36}  {title:<40}  {reason}")
+    if not any_shown:
+        print("\n  No highlights yet — index more sessions, or run `claudestudio demo`.")
+    return 0
+
+
 def cmd_doctor(args):
     print(BANNER)
     root = args.root or _parser.default_projects_root()
@@ -157,9 +207,13 @@ def cmd_doctor(args):
     age = pricing.price_table_age_days()
     flag = "STALE ⚠" if pricing.is_price_table_stale() else "ok ✓"
     print(f"  pricing data  : {flag} (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
+    from . import mcp
+    print(f"  mcp server    : {len(mcp.TOOLS)} tools (run `claudestudio mcp`)")
     if os.path.exists(args.db):
         conn = index.connect(args.db)
         s = index.session_summary(conn)
+        print(f"  schema ver    : {index.stored_schema_version(conn)} "
+              f"(current {index.SCHEMA_VERSION})")
         print(f"  indexed       : {s['sessions']:,} sessions, "
               f"{s['messages']:,} messages")
         conn.close()
@@ -393,9 +447,18 @@ def build_parser():
     p = sub.add_parser("export", help="export a session to Markdown or standalone HTML")
     _add_common(p)
     p.add_argument("session_id", help="session id (see `serve` or `index`)")
-    p.add_argument("--format", choices=["md", "markdown", "html"], default="md")
+    p.add_argument("--format", choices=["md", "markdown", "html", "json"], default="md")
     p.add_argument("--out", default=None, help="output file ('-' for stdout)")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("mcp", help="run the MCP server (JSON-RPC 2.0 over stdio)")
+    _add_common(p)
+    p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("highlights", help="surface interesting moments from your history")
+    _add_common(p)
+    p.add_argument("--json", action="store_true", help="emit raw JSON for scripting")
+    p.set_defaults(func=cmd_highlights)
 
     p = sub.add_parser("doctor", help="diagnose environment & index health")
     _add_common(p)

@@ -4,19 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.4.1"
-description = "The desktop workspace for Claude Code — explore, search, replay and understand every session, locally."
+version = "0.5.0"
+description = "The desktop workspace for Claude Code — explore, search and replay every session, with a built-in MCP server, tool-usage analytics and smart highlights, locally."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Ingrid Toulotte" }]
-keywords = ["claude", "claude-code", "anthropic", "llm", "developer-tools", "local-first", "analytics"]
+keywords = ["claude", "claude-code", "anthropic", "mcp", "llm", "developer-tools", "session-browser", "local-first", "analytics"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: Utilities",
 ]
@@ -39,6 +44,8 @@ Issues = "https://github.com/ingridtoulotte/claudestudio/issues"
 
 [project.scripts]
 claudestudio = "claudestudio.cli:main"
+cs = "claudestudio.cli:main"
+claudestudio-mcp = "claudestudio.mcp:main"
 
 [tool.setuptools]
 packages = ["claudestudio"]

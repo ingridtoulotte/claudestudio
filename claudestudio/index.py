@@ -149,11 +149,17 @@ def connect(db_path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(_SCHEMA)
-    maybe_migrate(conn)
-    conn.commit()
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.executescript(_SCHEMA)
+        maybe_migrate(conn)
+        conn.commit()
+    except Exception:
+        # Don't leak the open handle when migration rejects a newer-schema index
+        # (a leaked handle blocks the file from being removed/rebuilt on Windows).
+        conn.close()
+        raise
     return conn
 
 

@@ -172,6 +172,27 @@ def _export_all(conn, args) -> int:
 
 def cmd_export(args):
     conn = index.connect(args.db)
+    want_zip = bool(getattr(args, "zip", False)) or bool(
+        args.out and str(args.out).lower().endswith(".zip")
+    )
+    if want_zip:
+        if getattr(args, "all", False):
+            ids = _collect_session_ids(conn, getattr(args, "project", None))
+        elif args.session_id:
+            ids = [args.session_id]
+        else:
+            conn.close()
+            print("  For a .zip, pass --all (optionally --project) or a session id.")
+            return 1
+        fmt = "html" if args.format == "html" else ("json" if args.format == "json" else "md")
+        out = api.export_batch(conn, ids, fmt, include_index=True)
+        conn.close()
+        dest = _safe_out_path(args.out or "claudestudio-export.zip", "claudestudio-export.zip")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(out["bytes"])
+        print(f"  archive → {dest}  ({out['count']} session(s), {len(out['bytes']):,} bytes)")
+        return 0
     if getattr(args, "all", False):
         return _export_all(conn, args)
     if not args.session_id:
@@ -192,6 +213,87 @@ def cmd_export(args):
     with open(dest, "w", encoding="utf-8") as fh:
         fh.write(out["text"])
     print(f"  exported → {dest}  ({len(out['text']):,} bytes)")
+    return 0
+
+
+def _collect_session_ids(conn, project=None, archived="all") -> list[str]:
+    """Every indexed session id (optionally one project), paged out of the index."""
+    ids: list[str] = []
+    offset = 0
+    while True:
+        params = {"archived": archived, "limit": 500, "offset": offset}
+        if project:
+            params["project"] = project
+        page = api.list_sessions(conn, params)
+        ids.extend(s["session_id"] for s in page["sessions"])
+        offset += 500
+        if offset >= page.get("total", 0) or not page["sessions"]:
+            break
+    return ids
+
+
+def cmd_budget(args):
+    """Show spend vs budget, or set/clear a spend ceiling."""
+    from . import budget as budgetmod
+    conn = index.connect(args.db)
+    if args.clear:
+        budgetmod.clear_budget(conn)
+        print("  budget cleared.")
+    elif args.set is not None:
+        rec = budgetmod.set_budget(conn, args.period, args.set)
+        print(f"  ✓ budget set: ${rec['ceiling_usd']:,.2f} / {rec['period']}")
+    st = budgetmod.budget_status(conn)
+    conn.close()
+    print(BANNER)
+    if not st["has_budget"]:
+        print(f"  No budget set. Spend this {st['period'][:-2]}: "
+              f"${st['spent_usd']:,.2f} across {st['sessions_this_period']} session(s).")
+        print("  Set one:  claudestudio budget --set 50 --period monthly")
+        return 0
+    pct = st["percent"]
+    width = 28
+    filled = min(width, int(round(width * pct / 100.0)))
+    bar = "█" * filled + "·" * (width - filled)
+    flag = " ⚠ OVER BUDGET" if pct >= 100 else (" ⚠" if st["alert"] else "")
+    print(f"  {st['period'].title()} budget  ${st['ceiling_usd']:,.2f}{flag}")
+    print(f"  [{bar}] {pct:.0f}%")
+    print(f"  spent   ${st['spent_usd']:,.2f}   remaining ${st['remaining_usd']:,.2f}")
+    print(f"  {st['sessions_this_period']} session(s) · {st['days_remaining']} day(s) left in period")
+    return 0
+
+
+def cmd_generate_claude_md(args):
+    """Generate a CLAUDE.md from a project's indexed history."""
+    from . import generate_claude_md
+    conn = index.connect(args.db)
+    project = args.project
+    if not project:
+        row = conn.execute(
+            "SELECT project_name FROM sessions WHERE project_name<>'' "
+            "GROUP BY project_name ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetchone()
+        project = row[0] if row else None
+    if not project:
+        conn.close()
+        print("  No indexed projects. Run `claudestudio index` (or `demo`) first.")
+        return 1
+    profile = generate_claude_md.analyse_project(conn, project)
+    markdown = generate_claude_md.render_claude_md(profile)
+    conn.close()
+    if args.dry_run or args.out == "-" or not args.out:
+        sys.stdout.write(markdown)
+        if not markdown.endswith("\n"):
+            sys.stdout.write("\n")
+        if args.dry_run:
+            print(f"\n  (dry run — {profile['sessions']} session(s) analysed for "
+                  f"{profile['project_name']!r}; pass --out CLAUDE.md to write)")
+        return 0
+    dest = _safe_out_path(args.out, "CLAUDE.md")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(markdown)
+    print(f"  CLAUDE.md → {dest}  ({len(markdown):,} bytes, "
+          f"{profile['sessions']} session(s) analysed)")
     return 0
 
 
@@ -696,6 +798,10 @@ def build_parser():
     p.add_argument("--format", choices=["md", "markdown", "html", "json"], default="md")
     p.add_argument("--out", default=None, help="output file ('-' for stdout)")
     p.add_argument("--all", action="store_true", help="export every indexed session")
+    p.add_argument("--project", default=None,
+                   help="with --all, restrict to one project (path or name)")
+    p.add_argument("--zip", action="store_true",
+                   help="bundle into a .zip archive (implied when --out ends in .zip)")
     p.add_argument("--out-dir", default=None,
                    help="destination directory for --all (default: ./claudestudio-export)")
     p.add_argument("--force", action="store_true",
@@ -712,9 +818,27 @@ def build_parser():
 
     p = sub.add_parser("watch", help="auto-reindex as sessions change (live mode)")
     _add_common(p)
-    p.add_argument("--interval", type=float, default=5.0,
-                   help="seconds between polls (default 5)")
+    p.add_argument("--interval", "--poll-interval", type=float, default=5.0,
+                   dest="interval", help="seconds between polls (default 5)")
     p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("budget", help="track spend against a monthly/weekly ceiling")
+    _add_common(p)
+    p.add_argument("--set", type=float, default=None, metavar="USD",
+                   help="set the ceiling in dollars, e.g. --set 50")
+    p.add_argument("--period", default="monthly", choices=["monthly", "weekly"],
+                   help="budget period (default monthly)")
+    p.add_argument("--clear", action="store_true", help="remove the budget")
+    p.set_defaults(func=cmd_budget)
+
+    p = sub.add_parser("generate-claude-md",
+                       help="generate a CLAUDE.md from a project's session history")
+    _add_common(p)
+    p.add_argument("--project", default=None,
+                   help="project path or name (default: your most active project)")
+    p.add_argument("--out", default=None, help="write here ('-' for stdout); default prints")
+    p.add_argument("--dry-run", action="store_true", help="print without writing a file")
+    p.set_defaults(func=cmd_generate_claude_md)
 
     p = sub.add_parser("mcp", help="run the MCP server (JSON-RPC 2.0 over stdio)")
     _add_common(p)

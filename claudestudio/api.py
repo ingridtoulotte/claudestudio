@@ -27,6 +27,7 @@ SORT_COLUMNS = {
     "tokens": "(input_tokens+output_tokens+cache_write+cache_read)",
     "duration": "duration_s",
     "title": "title",
+    "health": "health_score",
 }
 
 
@@ -187,7 +188,43 @@ def get_session(conn, session_id: str) -> dict | None:
         timeline.append(md)
 
     session["timeline"] = timeline
+    session["health"] = _session_health(session, timeline)
+    session["git"] = _session_git(session)
     return session
+
+
+def _session_health(session: dict, timeline: list) -> dict:
+    """Recompute the full health breakdown for the detail view from already
+    -fetched data (no extra queries). Mirrors the cached `health_score` column."""
+    from . import health
+    tool_errors = sum(
+        1 for m in timeline for t in m.get("tools", []) if t.get("is_error")
+    )
+    if timeline:
+        last = timeline[-1]
+        last_tools = last.get("tools", [])
+        completion = health.completion_signal_for(
+            last.get("role"), bool(last_tools),
+            any(t.get("is_error") for t in last_tools),
+        )
+    else:
+        completion = 0.0
+    return health.compute(
+        tool_calls=session.get("tool_calls", 0) or 0,
+        tool_errors=tool_errors,
+        input_tokens=session.get("input_tokens", 0) or 0,
+        output_tokens=session.get("output_tokens", 0) or 0,
+        msg_count=session.get("msg_count", 0) or 0,
+        completion_signal=completion,
+    )
+
+
+def _session_git(session: dict) -> dict | None:
+    """Best-effort git context for the session's project. Never raises."""
+    from . import git_context
+    project = session.get("project") or ""
+    last_epoch = session.get("last_epoch") or session.get("first_epoch") or 0.0
+    return git_context.get_git_context(project, last_epoch)
 
 
 def search(conn, params: dict) -> dict:
@@ -979,3 +1016,349 @@ def ask(conn, question, session=None) -> dict:
     payload = ask_engine.answer(conn, question, session)
     payload["suggestions"] = ask_engine.suggestions(bool(session))
     return payload
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: budget tracker  (F3)
+# ---------------------------------------------------------------------------
+
+def budget_status(conn) -> dict:
+    from . import budget
+    return budget.budget_status(conn)
+
+
+def set_budget(conn, body: dict) -> dict:
+    from . import budget
+    return budget.set_budget(conn, body.get("period"), body.get("ceiling_usd"))
+
+
+def clear_budget(conn) -> dict:
+    from . import budget
+    return budget.clear_budget(conn)
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: session annotations  (F5)
+# ---------------------------------------------------------------------------
+
+def get_annotations(conn, session_id: str) -> dict:
+    return {"session_id": session_id, "annotations": index.list_annotations(conn, session_id)}
+
+
+def upsert_annotation(conn, session_id: str, body: dict) -> dict:
+    return index.upsert_annotation(
+        conn, session_id, body.get("message_idx", -1), body.get("note", "")
+    )
+
+
+def delete_annotation(conn, annotation_id) -> dict:
+    return index.delete_annotation(conn, annotation_id)
+
+
+def search_annotations(conn, params: dict) -> dict:
+    q = (params.get("q") or "").strip()
+    limit = _int_param(params.get("limit"), 50, lo=1, hi=200)
+    return {"query": q, "results": index.search_annotations(conn, q, limit)}
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: prompt library  (F8)
+# ---------------------------------------------------------------------------
+
+def list_prompts(conn, params: dict) -> dict:
+    q = (params.get("q") or "").strip() or None
+    starred = params.get("starred") in ("1", "true", "yes", True)
+    limit = _int_param(params.get("limit"), 200, lo=1, hi=1000)
+    return {"prompts": index.list_prompts(conn, q, starred, limit)}
+
+
+def add_prompt(conn, body: dict) -> dict:
+    return index.upsert_prompt(
+        conn,
+        prompt_id=body.get("id"),
+        text=body.get("text", ""),
+        source=str(body.get("source") or "manual"),
+        frequency=_int_param(body.get("frequency"), 1, lo=0),
+        starred=body.get("starred"),
+    )
+
+
+def delete_prompt(conn, prompt_id) -> dict:
+    return index.delete_prompt(conn, prompt_id)
+
+
+def extract_prompts(conn, body: dict | None = None) -> dict:
+    """Run extraction over history and upsert the results into the library.
+
+    Returns how many prompts were added/updated and the new total — the UI shows
+    "found N reusable prompts".
+    """
+    from . import prompt_library
+    body = body or {}
+    top_n = _int_param(body.get("top_n"), 50, lo=1, hi=500)
+    min_count = _int_param(body.get("min_count"), 3, lo=2, hi=1000)
+    found = prompt_library.extract(conn, top_n, min_count=min_count)
+    for p in found:
+        index.upsert_prompt(
+            conn, prompt_id=p["id"], text=p["text"],
+            source="extracted", frequency=p["frequency"],
+        )
+    return {"extracted": len(found), "total": len(index.list_prompts(conn, limit=1000))}
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: token-efficiency dashboard  (F6)  — pure read, no new storage
+# ---------------------------------------------------------------------------
+
+def _iso_week(epoch: float) -> str | None:
+    from . import parser as _p
+    dt = _p.local_datetime(epoch)
+    if dt is None:
+        return None
+    iso = dt.isocalendar()
+    return f"{iso[0]:04d}-W{iso[1]:02d}"
+
+
+def efficiency(conn) -> dict:
+    """How *effective* sessions are, not just how much they cost.
+
+    Output-per-dollar, tool-success rate, messages-per-session, and a per-project
+    efficiency ranking — all computed from the existing tables. Deterministic.
+    """
+    import statistics
+
+    ov = conn.execute(
+        "SELECT COUNT(*) sessions, COALESCE(SUM(cost_usd),0) cost, "
+        "       COALESCE(SUM(output_tokens),0) out, COALESCE(SUM(msg_count),0) msgs "
+        "FROM sessions"
+    ).fetchone()
+    tov = conn.execute(
+        "SELECT COUNT(*) calls, COALESCE(SUM(is_error),0) errors FROM tool_calls"
+    ).fetchone()
+    durations = [r["duration_s"] or 0.0 for r in conn.execute(
+        "SELECT duration_s FROM sessions WHERE duration_s IS NOT NULL")]
+    sessions = ov["sessions"] or 0
+    cost = ov["cost"] or 0.0
+    calls = tov["calls"] or 0
+    errors = tov["errors"] or 0
+    overall = {
+        "output_tokens_per_dollar": round((ov["out"] or 0) / cost, 2) if cost > 0 else 0.0,
+        "tool_success_rate": round((calls - errors) / calls, 4) if calls else 1.0,
+        "avg_messages_per_session": round((ov["msgs"] or 0) / sessions, 2) if sessions else 0.0,
+        "median_session_duration_s": int(statistics.median(durations)) if durations else 0,
+    }
+
+    # Per-project aggregates, then a composite efficiency rank.
+    proj: dict[str, dict] = {}
+    for r in conn.execute(
+        "SELECT COALESCE(project_name,'(unknown)') p, COUNT(*) sessions, "
+        "       COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(output_tokens),0) out "
+        "FROM sessions GROUP BY project_name"
+    ):
+        proj[r["p"]] = {"project": r["p"], "sessions": r["sessions"],
+                        "cost_usd": round(r["cost"], 4), "_out": r["out"] or 0,
+                        "calls": 0, "errors": 0}
+    for r in conn.execute(
+        "SELECT COALESCE(s.project_name,'(unknown)') p, COUNT(*) calls, "
+        "       COALESCE(SUM(t.is_error),0) errors "
+        "FROM tool_calls t JOIN sessions s USING(session_id) GROUP BY s.project_name"
+    ):
+        if r["p"] in proj:
+            proj[r["p"]]["calls"] = r["calls"]
+            proj[r["p"]]["errors"] = r["errors"]
+    by_project = []
+    for p in proj.values():
+        c, e = p["calls"], p["errors"]
+        opd = round(p["_out"] / p["cost_usd"], 2) if p["cost_usd"] > 0 else 0.0
+        by_project.append({
+            "project": p["project"], "sessions": p["sessions"],
+            "cost_usd": p["cost_usd"],
+            "tool_success_rate": round((c - e) / c, 4) if c else 1.0,
+            "output_per_dollar": opd,
+        })
+    # Composite score: half tool-success, half normalised output-per-dollar.
+    max_opd = max((p["output_per_dollar"] for p in by_project), default=0.0) or 1.0
+    for p in by_project:
+        p["_score"] = 0.5 * p["tool_success_rate"] + 0.5 * (p["output_per_dollar"] / max_opd)
+    by_project.sort(key=lambda p: (-p["_score"], p["project"]))
+    for rank, p in enumerate(by_project, start=1):
+        p["efficiency_rank"] = rank
+        p.pop("_score", None)
+
+    # 12-week trend.
+    weekly: dict[str, dict] = {}
+    for r in conn.execute("SELECT last_epoch, output_tokens, cost_usd FROM sessions"):
+        wk = _iso_week(r["last_epoch"] or 0.0)
+        if wk is None:
+            continue
+        w = weekly.setdefault(wk, {"out": 0, "cost": 0.0, "calls": 0, "errors": 0})
+        w["out"] += r["output_tokens"] or 0
+        w["cost"] += r["cost_usd"] or 0.0
+    for r in conn.execute(
+        "SELECT s.last_epoch, t.is_error FROM tool_calls t JOIN sessions s USING(session_id)"
+    ):
+        wk = _iso_week(r["last_epoch"] or 0.0)
+        if wk is None or wk not in weekly:
+            continue
+        weekly[wk]["calls"] += 1
+        weekly[wk]["errors"] += 1 if r["is_error"] else 0
+    trend = []
+    for wk in sorted(weekly.keys())[-12:]:
+        w = weekly[wk]
+        trend.append({
+            "week": wk,
+            "tool_success_rate": round((w["calls"] - w["errors"]) / w["calls"], 4) if w["calls"] else 1.0,
+            "output_per_dollar": round(w["out"] / w["cost"], 2) if w["cost"] > 0 else 0.0,
+        })
+
+    return {"overall": overall, "by_project": by_project, "trend": trend}
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: CLAUDE.md generator  (F4)  + project brief (used by MCP, F9)
+# ---------------------------------------------------------------------------
+
+def project_claude_md(conn, project: str) -> dict:
+    from . import generate_claude_md
+    profile = generate_claude_md.analyse_project(conn, project)
+    markdown = generate_claude_md.render_claude_md(profile)
+    return {"markdown": markdown, "profile": profile}
+
+
+def project_brief(conn, project: str) -> dict:
+    """A full onboarding brief for a project: stats + the CLAUDE.md profile."""
+    from . import generate_claude_md
+    profile = generate_claude_md.analyse_project(conn, project)
+    return {
+        "project": profile.get("project"),
+        "project_name": profile.get("project_name"),
+        "found": profile.get("found", False),
+        "sessions": profile.get("sessions", 0),
+        "cost_usd": profile.get("cost_usd", 0.0),
+        "total_tokens": profile.get("total_tokens", 0),
+        "last_activity": (profile.get("date_range") or {}).get("last"),
+        "top_files": profile.get("top_files", []),
+        "top_tools": profile.get("top_tools", []),
+        "tech_stack": profile.get("tech_stack", []),
+        "profile": profile,
+    }
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: cost-by-period  (used by MCP get_cost_by_period, F9)
+# ---------------------------------------------------------------------------
+
+def cost_by_period(conn, period: str = "monthly", n: int = 6) -> dict:
+    """Spend / tokens / session counts for the last `n` calendar periods."""
+    from . import parser as _p
+    period = (period or "monthly").strip().lower()
+    if period not in ("daily", "weekly", "monthly"):
+        period = "monthly"
+    n = _int_param(n, 6, lo=1, hi=120)
+
+    def key(epoch):
+        dt = _p.local_datetime(epoch)
+        if dt is None:
+            return None
+        if period == "daily":
+            return dt.strftime("%Y-%m-%d")
+        if period == "weekly":
+            iso = dt.isocalendar()
+            return f"{iso[0]:04d}-W{iso[1]:02d}"
+        return dt.strftime("%Y-%m")
+
+    buckets: dict[str, dict] = {}
+    for r in conn.execute(
+        "SELECT last_epoch, cost_usd, input_tokens, output_tokens FROM sessions"
+    ):
+        k = key(r["last_epoch"] or 0.0)
+        if k is None:
+            continue
+        b = buckets.setdefault(k, {"period": k, "sessions": 0, "cost_usd": 0.0, "tokens": 0})
+        b["sessions"] += 1
+        b["cost_usd"] += r["cost_usd"] or 0.0
+        b["tokens"] += (r["input_tokens"] or 0) + (r["output_tokens"] or 0)
+    ordered = [buckets[k] for k in sorted(buckets.keys())][-n:]
+    for b in ordered:
+        b["cost_usd"] = round(b["cost_usd"], 4)
+    return {"period": period, "periods": ordered}
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: diffs for a whole session  (used by MCP get_diff_for_session, F9)
+# ---------------------------------------------------------------------------
+
+def diffs_for_session(conn, session_id: str, file_path: str | None = None) -> dict:
+    """Every inline diff in a session, optionally filtered to one file."""
+    detail = get_session(conn, session_id)
+    if detail is None:
+        return {"session_id": session_id, "error": "not found", "diffs": []}
+    want = (file_path or "").strip().rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+    diffs = []
+    for m in detail.get("timeline", []):
+        for t in m.get("tools", []):
+            if not t.get("diff"):
+                continue
+            fname = _diff_path(t.get("input") or {})
+            if want and fname.lower() != want:
+                continue
+            diffs.append({
+                "seq": m.get("seq"), "tool": t.get("name"), "file": fname,
+                "diff": t["diff"], "truncated": t.get("diff_truncated", False),
+            })
+    return {"session_id": session_id, "file_path": file_path, "diffs": diffs}
+
+
+# ---------------------------------------------------------------------------
+# v0.5.2: batch export + archive  (F11)  — pure stdlib zipfile
+# ---------------------------------------------------------------------------
+
+def export_batch(conn, session_ids, fmt: str = "md", include_index: bool = True) -> dict:
+    """Bundle several sessions into a ZIP archive built in memory.
+
+    Each session becomes one Markdown/HTML file; an ``index.md`` table of contents
+    is added when ``include_index`` is set. Returns ``{bytes, content_type,
+    filename, count}``.
+    """
+    import zipfile
+
+    fmt = fmt if fmt in ("md", "markdown", "html", "json") else "md"
+    ids = [str(s) for s in (session_ids or []) if str(s).strip()]
+    buf = io.BytesIO()
+    entries: list[dict] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sid in ids:
+            out = export_session(conn, sid, fmt)
+            if out is None:
+                continue
+            arc = f"{_slug(sid, sid[:8] or 'session')}-{out['filename']}"
+            zf.writestr(arc, out["text"])
+            summ = get_session_summary(conn, sid) or {}
+            entries.append({
+                "session_id": sid, "file": arc,
+                "title": summ.get("title") or "Untitled",
+                "last_ts": summ.get("last_ts") or "",
+                "cost_usd": summ.get("cost_usd") or 0.0,
+                "msg_count": summ.get("msg_count") or 0,
+            })
+        if include_index:
+            zf.writestr("index.md", _batch_index_md(entries))
+    return {
+        "bytes": buf.getvalue(), "content_type": "application/zip",
+        "filename": "claudestudio-export.zip", "count": len(entries),
+    }
+
+
+def _batch_index_md(entries: list[dict]) -> str:
+    lines = ["# ClaudeStudio export", "",
+             f"{len(entries)} session(s).", "",
+             "| Session | Date | Messages | Cost | File |",
+             "|---|---|---|---|---|"]
+    for e in entries:
+        title = str(e["title"]).replace("|", "\\|")[:60]
+        date = str(e["last_ts"])[:10]
+        lines.append(
+            f"| {title} | {date} | {e['msg_count']} | "
+            f"${float(e['cost_usd']):.2f} | [{e['file']}]({e['file']}) |"
+        )
+    return "\n".join(lines) + "\n"

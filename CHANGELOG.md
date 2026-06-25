@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-25
+
+The "ambient intelligence" release. ClaudeStudio now reads *meaning* out of your
+history, not just metadata: it scores how productive each session was, tracks
+your spend against a budget, generates a `CLAUDE.md` from how you actually work,
+lets you annotate sessions into a personal knowledge base, and surfaces a
+reusable prompt library — all still local-first, zero-dependency, and covered by
+an expanded self-test (301 → 396 checks). The MCP server grows 10 → 14 tools.
+
+### Added
+- **Session health score (`health.py`).** Every session gets a deterministic
+  0–100 health score + letter grade, a weighted blend of tool-success rate,
+  error density, output/input token ratio, and a completion signal (did it end
+  on a clean wrap-up, mid-tool-call, or an unanswered prompt?). Cached on a new
+  `sessions.health_score` column at index time, surfaced as a coloured A–F dot in
+  the session list, a breakdown card in the detail view, and a new `list --sort
+  health` ordering.
+- **Budget tracker & spend alerts (`budget.py`, `claudestudio budget`,
+  `GET/POST/DELETE /api/budget`).** Set a `$/month` or `$/week` ceiling; the app
+  tracks cumulative spend for the current calendar period from local logs,
+  renders a pure-SVG radial progress arc in the Efficiency view, and raises a
+  sticky, dismissible banner when you cross 75%. Zero model calls.
+- **CLAUDE.md generator (`generate_claude_md.py`, `claudestudio
+  generate-claude-md`, `GET /api/project/{id}/claude-md`).** Analyses a project's
+  indexed history and renders a ready-to-paste `CLAUDE.md` — top tools, most
+  -touched files, inferred stack, recurring pitfalls and prompt intents. Backs
+  the new MCP `generate_project_brief` tool, so a brief and a CLAUDE.md agree.
+- **Session annotations (`annotations` table + `annotations_fts`,
+  `GET/POST/DELETE /api/session/{id}/annotations`, `GET /api/annotations/search`).**
+  Attach personal notes to a whole session or an individual message. Notes live
+  in their own table (survive reindexing), are full-text searchable via FTS5, and
+  are exposed to Claude Code through the new MCP `get_annotations` tool.
+- **Token efficiency dashboard (`GET /api/analytics/efficiency`).** A new
+  Efficiency view: output-tokens-per-dollar, tool-success rate, messages per
+  session, median duration, a per-project efficiency ranking (pure-SVG bars), and
+  a 12-week trend sparkline. Computed entirely from existing tables — no new
+  storage.
+- **Git context (`git_context.py`).** For a session whose project is a git repo,
+  ClaudeStudio resolves the commit that was `HEAD` at the session's time (read
+  -only `git log`, cached, never raises) and shows a `🔀 branch @ sha` badge in
+  the detail view (click to copy). Exposed on `GET /api/session/{id}`.
+- **Prompt library (`prompt_library.py`, `prompt_library` table,
+  `GET/POST/DELETE /api/prompts`, `POST /api/prompts/extract`).** Auto-extracts
+  your most reusable prompt patterns (trigram clustering + a reusability
+  heuristic that penalises one-off references), plus manual add/star/search. A
+  new Prompts view in the sidebar.
+- **Batch export + archive (`POST /api/export/batch`, `claudestudio export --all
+  --zip`).** Bundle many sessions into a single ZIP (stdlib `zipfile`) of
+  individual Markdown/HTML files plus a generated `index.md` table of contents.
+- **Four new MCP tools (10 → 14):** `get_cost_by_period`, `get_diff_for_session`,
+  `get_annotations`, `generate_project_brief`. See [`docs/MCP.md`](docs/MCP.md).
+- **Keyboard navigation system (`web/keyboard.js`).** A `KeyboardNavigator` that
+  maps keys to high-level `cs:navigate`/`cs:action` intents (decoupled from view
+  code) and a `?` cheat-sheet overlay; preferences stored in `localStorage`.
+- **New full HTTP API reference: [`docs/API.md`](docs/API.md).**
+
+### Changed
+- Schema **v2 → v3**: adds the `sessions.health_score` column and the `budgets`,
+  `annotations` (+ `annotations_fts`) and `prompt_library` tables. Migration is
+  in-place and idempotent; no indexed data or user state is lost.
+- `Development Status` classifier promoted to **5 - Production/Stable**.
+- `claudestudio watch` accepts `--poll-interval` as an alias for `--interval`.
+- Self-test grew **301 → 396** checks; MCP now exposes **14** tools.
+
+### Fixed
+- N/A — additive release; all prior behaviour and existing tests are preserved.
+
 ## [0.5.1] - 2026-06-25
 
 The "make it part of your daily loop" release. ClaudeStudio now keeps itself

@@ -109,6 +109,19 @@ const API = {
   reportUrl: (since, until, fmt = 'html') => '/api/report.' + fmt + '?' + new URLSearchParams({ since, until }),
   analyticsCsvUrl: () => '/api/analytics.csv',
   sessionsCsvUrl: () => '/api/sessions.csv',
+  // v0.5.2
+  budget: () => API.get('/api/budget'),
+  setBudget: (b) => API.post('/api/budget', b),
+  clearBudget: () => fetch('/api/budget', { method: 'DELETE' }).then((r) => r.json()),
+  efficiency: () => API.get('/api/analytics/efficiency'),
+  prompts: (q) => API.get('/api/prompts' + (q ? '?' + new URLSearchParams(q) : '')),
+  addPrompt: (b) => API.post('/api/prompts', b),
+  delPrompt: (id) => fetch('/api/prompts/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
+  extractPrompts: () => API.post('/api/prompts/extract', {}),
+  annotations: (id) => API.get('/api/session/' + encodeURIComponent(id) + '/annotations'),
+  saveAnnotation: (id, b) => API.post('/api/session/' + encodeURIComponent(id) + '/annotations', b),
+  delAnnotation: (id, aid) => fetch('/api/session/' + encodeURIComponent(id) + '/annotations/' + encodeURIComponent(aid), { method: 'DELETE' }).then((r) => r.json()),
+  claudeMd: (project) => API.get('/api/project/' + encodeURIComponent(project) + '/claude-md'),
 };
 
 // trigger a browser download from a server endpoint that sets Content-Disposition
@@ -185,6 +198,8 @@ const NAV = [
   { id: 'bookmarks', label: 'Bookmarks', icon: 'M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z' },
   { id: 'timeline', label: 'Timeline', icon: 'M3 12h4l3-8 4 16 3-8h4' },
   { id: 'analytics', label: 'Analytics', icon: 'M4 19V5M4 19h16M8 16v-5M13 16V8M18 16v-9' },
+  { id: 'efficiency', label: 'Efficiency', icon: 'M13 2L3 14h7l-1 8 10-12h-7l1-8z' },
+  { id: 'prompts', label: 'Prompts', icon: 'M4 5h16M4 12h16M4 19h10M18 17l3 2-3 2' },
   { id: 'projects', label: 'Projects', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
   { id: 'compare', label: 'Compare', icon: 'M9 3v18M4 7h5M4 12h5M4 17h5M15 3v18M15 8h5M15 13h5' },
   { id: 'wrapped', label: 'Wrapped', icon: 'M12 2l2.4 5 5.6.5-4.2 3.7 1.3 5.5L12 19l-5.1 2.7 1.3-5.5L4 12.5 9.6 12z' },
@@ -250,6 +265,8 @@ async function router() {
     if (route === 'ask') return await viewAsk(params);
     if (route === 'bookmarks') return await viewBookmarks(params);
     if (route === 'analytics') return await viewAnalytics();
+    if (route === 'efficiency') return await viewEfficiency();
+    if (route === 'prompts') return await viewPrompts();
     if (route === 'projects') return await viewProjects();
     if (route === 'timeline') return await viewTimeline();
     if (route === 'compare') return await viewCompare(params);
@@ -393,9 +410,10 @@ function sessionRow(s) {
     return el('span', { class: `chip model-chip fam-${f}` }, [el('span', { class: 'dot' }), shortModel(m)]);
   });
   const star = s.favorite ? el('span', { class: 'star', html: '★' }) : null;
+  const dot = healthDot(s.health_score);
   const row = el('div', { class: 's-row', onclick: () => go('session/' + s.session_id) }, [
     el('div', { class: 's-main' }, [
-      el('div', { class: 's-title' }, [star, el('span', { class: 'txt', text: s.title || 'Untitled session' })].filter(Boolean)),
+      el('div', { class: 's-title' }, [dot, star, el('span', { class: 'txt', text: s.title || 'Untitled session' })].filter(Boolean)),
       el('div', { class: 's-meta' }, [
         el('span', { class: 'proj-chip', text: s.project_name || s.project }),
         el('span', { class: 'sep', text: '·' }),
@@ -487,6 +505,9 @@ async function viewSession(id, params = {}) {
       ds(fmt.dur(s.duration_s), 'duration'),
     ]),
   ]));
+
+  // v0.5.2: git context badge + health breakdown + session-level annotation
+  root.appendChild(detailContext(s, id));
 
   // at-a-glance brief — files touched + tools, computed from the timeline
   const brief = briefFromTimeline(s.timeline);
@@ -1539,8 +1560,231 @@ function showReindexToast() {
   setTimeout(dismiss, 8000);  // auto-dismiss after 8s
 }
 
+// ---- v0.5.2: health, git, annotations, budget, efficiency, prompts --------
+
+function healthGrade(score) {
+  return score >= 90 ? 'A' : score >= 80 ? 'B' : score >= 65 ? 'C' : score >= 50 ? 'D' : 'F';
+}
+
+// small coloured A–F badge shown next to a session in the list
+function healthDot(score) {
+  if (score == null) return null;
+  const g = healthGrade(score);
+  return el('span', { class: 'health-dot grade-' + g, title: `Health ${score}/100 (${g})`, text: g });
+}
+
+// git badge + health breakdown card + a session-level annotation editor
+function detailContext(s, id) {
+  const wrap = el('div', { class: 'detail-context' });
+  if (s.git && s.git.short_sha) {
+    const g = s.git;
+    wrap.appendChild(el('button', {
+      class: 'git-badge', title: 'Click to copy ' + g.sha,
+      onclick: () => { try { navigator.clipboard.writeText(g.sha); } catch (e) { /* */ } toast('Copied ' + g.short_sha); },
+    }, [el('span', { class: 'gi', text: '🔀' }),
+        el('span', { text: (g.branch || 'detached') + ' @ ' + g.short_sha })]));
+  }
+  if (s.health) {
+    const h = s.health, comp = h.components || {};
+    const bars = Object.entries({
+      'Tool success': comp.tool_success, 'Low errors': comp.error_density,
+      'Token output': comp.token_efficiency, 'Completion': comp.completion_signal,
+    }).map(([k, v]) => el('div', { class: 'hc-bar' }, [
+      el('span', { class: 'hc-k', text: k }),
+      el('span', { class: 'hc-track' }, [el('span', { class: 'hc-fill', style: 'width:' + Math.round((v || 0) * 100) + '%' })]),
+    ]));
+    wrap.appendChild(el('div', { class: 'health-card grade-' + h.grade }, [
+      el('div', { class: 'hc-head' }, [
+        el('span', { class: 'hc-grade', text: h.grade }),
+        el('span', { class: 'hc-score', text: h.score + '/100 · ' + h.label }),
+      ]),
+      el('div', { class: 'hc-bars' }, bars),
+    ]));
+  }
+  wrap.appendChild(annotationEditor(id));
+  return wrap;
+}
+
+// auto-saving session-level note (message_idx = -1); survives reindexing
+function annotationEditor(id) {
+  const ta = el('textarea', { class: 'ann-input', rows: 1,
+    placeholder: 'Add a personal note about this session… (saved on blur)' });
+  API.annotations(id).then((d) => {
+    const note = (d.annotations || []).find((a) => a.message_idx === -1);
+    if (note) ta.value = note.note;
+  }).catch(() => {});
+  ta.addEventListener('blur', async () => {
+    try { await API.saveAnnotation(id, { message_idx: -1, note: ta.value }); toast('Note saved'); }
+    catch (e) { toast('Save failed', 'err'); }
+  });
+  return el('div', { class: 'annotate' }, [el('span', { class: 'ann-k', text: '✎ Note' }), ta]);
+}
+
+// sticky, dismissible budget-alert banner — shown on load when over threshold
+function checkBudget() {
+  API.budget().then((b) => {
+    if (!b || !b.alert || document.querySelector('.budget-banner')) return;
+    const banner = el('div', { class: 'budget-banner' }, [
+      el('span', { html: `⚠ <b>Budget alert:</b> $${(b.spent_usd || 0).toFixed(2)} of $${(b.ceiling_usd || 0).toFixed(2)} this ${b.period} (${Math.round(b.percent)}%)` }),
+      el('button', { class: 'bb-x', title: 'Dismiss', onclick: (e) => e.target.closest('.budget-banner').remove() }, ['×']),
+    ]);
+    document.body.appendChild(banner);
+  }).catch(() => {});
+}
+
+// pure-SVG radial progress arc for the budget widget
+function radialArc(percent, { size = 132, stroke = 14 } = {}) {
+  const p = Math.max(0, Math.min(100, percent || 0));
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r, cx = size / 2;
+  const col = p >= 100 ? '#ff5b5b' : p >= 90 ? '#ff8a3d' : p >= 75 ? '#f5c451' : 'var(--accent)';
+  const len = (p / 100) * c;
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" class="budget-arc">
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="var(--line)" stroke-width="${stroke}"/>
+    <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${col}" stroke-width="${stroke}" stroke-linecap="round"
+      stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" transform="rotate(-90 ${cx} ${cx})"/>
+    <text x="${cx}" y="${cx - 2}" text-anchor="middle" fill="var(--text)" font-size="22" font-weight="700">${Math.round(p)}%</text>
+    <text x="${cx}" y="${cx + 16}" text-anchor="middle" fill="var(--text-3)" font-size="10">of budget</text></svg>`;
+}
+
+function kpiTile(v, label) {
+  return el('div', { class: 'eff-kpi' }, [
+    el('div', { class: 'eff-kpi-v', text: v }), el('div', { class: 'eff-kpi-l', text: label }),
+  ]);
+}
+
+function budgetWidget(bud) {
+  bud = bud || {};
+  const left = el('div', { class: 'bw-arc', html: bud.has_budget ? radialArc(bud.percent) : '' });
+  const form = el('div', { class: 'bw-form' });
+  if (bud.has_budget) {
+    form.appendChild(el('div', { class: 'bw-line', html: `<b>$${(bud.spent_usd || 0).toFixed(2)}</b> spent of <b>$${(bud.ceiling_usd || 0).toFixed(2)}</b> / ${bud.period}` }));
+    form.appendChild(el('div', { class: 'bw-sub', text: `${bud.sessions_this_period} sessions · ${bud.days_remaining} days left in period` }));
+  } else {
+    form.appendChild(el('div', { class: 'bw-line', text: 'No budget set — track spend against a ceiling.' }));
+  }
+  const amt = el('input', { class: 'bw-input', type: 'number', min: '0', step: '1', placeholder: 'e.g. 50', value: bud.ceiling_usd || '' });
+  const per = el('select', { class: 'bw-input' }, [el('option', { value: 'monthly', text: 'monthly' }), el('option', { value: 'weekly', text: 'weekly' })]);
+  if (bud.period === 'weekly') per.value = 'weekly';
+  const setb = el('button', { class: 'btn-primary', onclick: async () => { await API.setBudget({ ceiling_usd: parseFloat(amt.value) || 0, period: per.value }); toast('Budget set'); viewEfficiency(); } }, ['Set budget']);
+  const clr = el('button', { class: 'btn-ghost', onclick: async () => { await API.clearBudget(); toast('Budget cleared'); viewEfficiency(); } }, ['Clear']);
+  form.appendChild(el('div', { class: 'bw-controls' }, [amt, per, setb, clr]));
+  return el('div', { class: 'budget-widget card' }, [left, form]);
+}
+
+async function viewEfficiency() {
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [el('div', {}, [
+    el('div', { class: 'page-title', text: 'Efficiency' }),
+    el('div', { class: 'page-sub', text: 'How effective your sessions are — output per dollar, tool-success rate, and spend vs budget. Click a project to generate its CLAUDE.md.' }),
+  ])]));
+  view().innerHTML = ''; view().appendChild(root);
+  let eff, bud;
+  try { [eff, bud] = await Promise.all([API.efficiency(), API.budget()]); }
+  catch (e) { root.appendChild(el('div', { class: 'empty', text: 'Could not load efficiency data.' })); return; }
+  root.appendChild(budgetWidget(bud));
+  const o = eff.overall || {};
+  root.appendChild(el('div', { class: 'eff-kpis' }, [
+    kpiTile(fmt.num(Math.round(o.output_tokens_per_dollar || 0)), 'output tokens / $'),
+    kpiTile(Math.round((o.tool_success_rate || 0) * 100) + '%', 'tool success'),
+    kpiTile((o.avg_messages_per_session || 0).toFixed(1), 'msgs / session'),
+    kpiTile(fmt.dur(o.median_session_duration_s || 0), 'median duration'),
+  ]));
+  const projs = eff.by_project || [];
+  if (projs.length) {
+    const max = Math.max(1, ...projs.map((p) => p.output_per_dollar || 0));
+    root.appendChild(el('div', { class: 'card' }, [
+      el('div', { class: 'card-h', text: 'Projects by efficiency' }),
+      el('div', { class: 'eff-bars' }, projs.slice(0, 12).map((p) => el('div', {
+        class: 'eff-row', title: 'Generate CLAUDE.md for ' + p.project,
+        onclick: () => openClaudeMdModal(p.project),
+      }, [
+        el('span', { class: 'eff-name', text: p.project }),
+        el('span', { class: 'eff-track' }, [el('span', { class: 'eff-fill', style: 'width:' + Math.round(((p.output_per_dollar || 0) / max) * 100) + '%' })]),
+        el('span', { class: 'eff-val', text: Math.round((p.tool_success_rate || 0) * 100) + '% ok' }),
+      ]))),
+    ]));
+  }
+  const trend = eff.trend || [];
+  if (trend.length) {
+    root.appendChild(el('div', { class: 'card' }, [
+      el('div', { class: 'card-h', text: 'Output per dollar — last ' + trend.length + ' weeks' }),
+      el('div', { html: spark(trend.map((t) => t.output_per_dollar)) }),
+    ]));
+  }
+}
+
+async function viewPrompts() {
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [
+    el('div', {}, [
+      el('div', { class: 'page-title', text: 'Prompt Library' }),
+      el('div', { class: 'page-sub', text: 'Your reusable prompts — auto-extracted from history, plus your own. Star, copy, search.' }),
+    ]),
+    el('div', { class: 'page-actions' }, [
+      el('button', { class: 'btn-primary', onclick: async () => { const r = await API.extractPrompts(); toast('Found ' + r.extracted + ' reusable prompt(s)'); load(); } }, ['✦ Extract from history']),
+    ]),
+  ]));
+  const search = el('input', { class: 'prompt-search', type: 'text', placeholder: 'Search prompts…' });
+  const starOnly = el('button', { class: 'chip', onclick: () => { starOnly.classList.toggle('on'); load(); } }, ['★ Starred']);
+  const addBox = el('input', { class: 'prompt-add', type: 'text', placeholder: 'Add your own prompt…' });
+  const addBtn = el('button', { class: 'btn-ghost', onclick: async () => { if (!addBox.value.trim()) return; await API.addPrompt({ text: addBox.value.trim(), source: 'manual' }); addBox.value = ''; toast('Added'); load(); } }, ['+ Add']);
+  root.appendChild(el('div', { class: 'prompt-tools' }, [search, starOnly, addBox, addBtn]));
+  const grid = el('div', { class: 'prompt-grid' });
+  root.appendChild(grid);
+  view().innerHTML = ''; view().appendChild(root);
+  let timer;
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 200); });
+  async function load() {
+    grid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    const q = {};
+    if (search.value.trim()) q.q = search.value.trim();
+    if (starOnly.classList.contains('on')) q.starred = '1';
+    let data;
+    try { data = await API.prompts(q); } catch (e) { grid.innerHTML = ''; return; }
+    grid.innerHTML = '';
+    if (!(data.prompts || []).length) {
+      grid.appendChild(el('div', { class: 'empty', text: 'No prompts yet — extract from history or add one.' }));
+      return;
+    }
+    data.prompts.forEach((p) => grid.appendChild(promptCard(p, load)));
+  }
+  await load();
+}
+
+function promptCard(p, reload) {
+  const star = el('button', { class: 'pc-star' + (p.starred ? ' on' : ''), title: 'Star',
+    onclick: async (e) => { e.stopPropagation(); await API.addPrompt({ id: p.id, text: p.text, source: p.source, frequency: p.frequency, starred: !p.starred }); reload(); } }, [p.starred ? '★' : '☆']);
+  return el('div', { class: 'prompt-card' }, [
+    el('div', { class: 'pc-head' }, [star, el('span', { class: 'pc-src', text: p.source }),
+      p.frequency > 1 ? el('span', { class: 'pc-freq', text: '×' + p.frequency }) : null].filter(Boolean)),
+    el('div', { class: 'pc-text', text: p.text }),
+    el('div', { class: 'pc-actions' }, [
+      el('button', { class: 'btn-ghost', onclick: () => { try { navigator.clipboard.writeText(p.text); } catch (e) { /* */ } toast('Copied'); } }, ['⧉ Copy']),
+      el('button', { class: 'btn-ghost', onclick: async () => { await API.delPrompt(p.id); toast('Deleted'); reload(); } }, ['Delete']),
+    ]),
+  ]);
+}
+
+// modal showing a generated CLAUDE.md with copy-to-clipboard
+async function openClaudeMdModal(project) {
+  let data;
+  try { data = await API.claudeMd(project); } catch (e) { toast('Failed to generate', 'err'); return; }
+  const overlay = el('div', { class: 'cs-modal-backdrop', onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+  overlay.appendChild(el('div', { class: 'cs-modal' }, [
+    el('div', { class: 'cs-modal-head' }, [
+      el('span', { text: '✦ CLAUDE.md · ' + project }),
+      el('button', { class: 'cs-modal-x', onclick: () => overlay.remove() }, ['×']),
+    ]),
+    el('pre', { class: 'cs-modal-body', text: data.markdown }),
+    el('div', { class: 'cs-modal-foot' }, [
+      el('button', { class: 'btn-primary', onclick: () => { try { navigator.clipboard.writeText(data.markdown); } catch (e) { /* */ } toast('Copied CLAUDE.md'); } }, ['⧉ Copy to clipboard']),
+    ]),
+  ]));
+  document.body.appendChild(overlay);
+}
+
 // ---- boot -----------------------------------------------------------------
-window.__cs = { go, ss: () => sessionsState };
+window.__cs = { go, ss: () => sessionsState, claudeMd: openClaudeMdModal };
 window.addEventListener('hashchange', router);
 // close the bookmark popover on any outside click
 document.addEventListener('click', (e) => {
@@ -1565,4 +1809,5 @@ document.addEventListener('keydown', (e) => {
   if (!location.hash) location.hash = '#/sessions';
   router();
   startLiveUpdates();
+  checkBudget();
 })();

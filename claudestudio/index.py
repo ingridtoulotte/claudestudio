@@ -32,7 +32,13 @@ from .parser import ParsedSession
 # v2: `sources` gained a `root` column so one index can span several projects
 # roots (work laptop + personal machine + remote). The migration adds the column
 # in place, preserving all indexed data and user state.
-SCHEMA_VERSION = 2
+# v3 (v0.5.2): `sessions` gained a cached `health_score` column, and four new
+# user-owned tables landed — `budgets` (spend ceilings), `annotations` (inline
+# session/message notes) with its `annotations_fts` shadow, and `prompt_library`
+# (a personal, starrable prompt collection). The migration adds the column in
+# place; the tables are created by the schema script with IF NOT EXISTS. All
+# indexed data and user state is preserved.
+SCHEMA_VERSION = 3
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -79,7 +85,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     cache_read    INTEGER,
     cost_usd     REAL,
     file_path    TEXT,
-    preview      TEXT
+    preview      TEXT,
+    health_score INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_last  ON sessions(last_epoch DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_proj  ON sessions(project);
@@ -157,6 +164,48 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     created_epoch REAL
 );
 CREATE INDEX IF NOT EXISTS idx_bookmarks_session ON bookmarks(session_id, message_seq);
+
+-- spend ceilings (Budget Tracker) — user-owned, survives reindexing. A single
+-- active budget per period is the norm; the table keeps history so a ceiling
+-- change is auditable. `period` is 'monthly' | 'weekly'.
+CREATE TABLE IF NOT EXISTS budgets (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    period     TEXT,
+    ceiling_usd REAL,
+    created_at REAL
+);
+
+-- inline notes on a session (message_idx = -1) or one of its messages
+-- (message_idx = the 0-based seq). User-owned; never wiped by reindexing.
+CREATE TABLE IF NOT EXISTS annotations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT,
+    message_idx INTEGER DEFAULT -1,
+    note        TEXT DEFAULT '',
+    created_at  REAL,
+    updated_at  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_session ON annotations(session_id, message_idx);
+
+-- full-text shadow for annotation notes, kept in lockstep by the annotation
+-- CRUD helpers (reindexing never touches it, so notes are always searchable).
+CREATE VIRTUAL TABLE IF NOT EXISTS annotations_fts USING fts5(
+    note,
+    annotation_id UNINDEXED,
+    session_id UNINDEXED,
+    tokenize = 'porter unicode61'
+);
+
+-- a personal, reusable prompt library — auto-extracted from history and/or
+-- hand-added. User-owned; survives reindexing. `source` is 'extracted' | 'manual'.
+CREATE TABLE IF NOT EXISTS prompt_library (
+    id         TEXT PRIMARY KEY,
+    text       TEXT,
+    source     TEXT DEFAULT 'manual',
+    frequency  INTEGER DEFAULT 1,
+    starred    INTEGER DEFAULT 0,
+    created_at REAL
+);
 """
 
 
@@ -217,6 +266,12 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     src_cols = {r[1] for r in conn.execute("PRAGMA table_info(sources)")}
     if "root" not in src_cols:
         conn.execute("ALTER TABLE sources ADD COLUMN root TEXT")
+    # v3: cached per-session health score. Idempotent — a fresh db already has the
+    # column from the schema script; an old v1/v2 db gains it here (nullable, so
+    # existing rows read as "unscored" until the next reindex recomputes them).
+    sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "health_score" not in sess_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN health_score INTEGER")
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -273,10 +328,17 @@ def _insert_session(conn, ps: ParsedSession) -> None:
             preview = m.text[:280]
             break
 
+    # Cache the deterministic session-health score (0..100) so the list view can
+    # sort/colour by it without recomputing per request. Pure function of the
+    # parsed session — no model calls. Imported lazily to keep `health` free to
+    # import `parser` types without a cycle back through `index`.
+    from . import health
+    health_score = health.compute_health_score(ps)["score"]
+
     conn.execute(
         """INSERT OR REPLACE INTO sessions VALUES
            (:sid,:title,:project,:pname,:branch,:version,:fts,:lts,:fe,:le,:dur,
-            :mc,:um,:am,:tc,:models,:pm,:it,:ot,:cw,:cr,:cost,:fp,:prev)""",
+            :mc,:um,:am,:tc,:models,:pm,:it,:ot,:cw,:cr,:cost,:fp,:prev,:health)""",
         {
             "sid": ps.session_id, "title": ps.title, "project": ps.project,
             "pname": project_name, "branch": ps.git_branch, "version": ps.version,
@@ -287,7 +349,7 @@ def _insert_session(conn, ps: ParsedSession) -> None:
             "models": json.dumps(ps.models), "pm": primary_model,
             "it": ps.total_input, "ot": ps.total_output, "cw": ps.total_cache_write,
             "cr": ps.total_cache_read, "cost": ps.cost_usd, "fp": ps.file_path,
-            "prev": preview,
+            "prev": preview, "health": health_score,
         },
     )
     conn.execute(
@@ -566,3 +628,184 @@ def list_bookmarks(conn, session_id: str | None = None) -> list[dict]:
             "ORDER BY b.created_epoch DESC, b.id ASC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# annotations  (inline session/message notes — user state, survive reindexing)
+# ---------------------------------------------------------------------------
+#
+# An annotation is a personal note on a whole session (``message_idx = -1``) or
+# on one message (``message_idx = 0-based seq``). Notes live in their own table
+# (never wiped by reindexing) with an FTS5 shadow kept in lockstep here so the
+# search box finds them. There is at most one note per (session, message_idx);
+# writing the same target again updates it in place.
+
+def _ann_fts_delete(conn, annotation_id: int) -> None:
+    conn.execute("DELETE FROM annotations_fts WHERE annotation_id=?", (annotation_id,))
+
+
+def _ann_fts_insert(conn, annotation_id: int, session_id: str, note: str) -> None:
+    conn.execute(
+        "INSERT INTO annotations_fts(note, annotation_id, session_id) VALUES(?,?,?)",
+        (note, annotation_id, session_id),
+    )
+
+
+def upsert_annotation(conn, session_id: str, message_idx, note: str) -> dict:
+    """Create or update the note for one (session, message) target. Returns the row.
+
+    ``message_idx = -1`` is the session-level note. The FTS shadow is updated in
+    the same transaction so a freshly-written note is immediately searchable.
+    """
+    try:
+        midx = int(message_idx)
+    except (TypeError, ValueError):
+        midx = -1
+    note = str(note or "")
+    now = time.time()
+    existing = conn.execute(
+        "SELECT id FROM annotations WHERE session_id=? AND message_idx=?",
+        (session_id, midx),
+    ).fetchone()
+    if existing:
+        aid = existing["id"]
+        conn.execute(
+            "UPDATE annotations SET note=?, updated_at=? WHERE id=?",
+            (note, now, aid),
+        )
+        _ann_fts_delete(conn, aid)
+        _ann_fts_insert(conn, aid, session_id, note)
+        created = None
+    else:
+        cur = conn.execute(
+            "INSERT INTO annotations(session_id, message_idx, note, created_at, updated_at) "
+            "VALUES(?,?,?,?,?)",
+            (session_id, midx, note, now, now),
+        )
+        aid = cur.lastrowid
+        _ann_fts_insert(conn, aid, session_id, note)
+        created = now
+    conn.commit()
+    return {
+        "id": aid, "session_id": session_id, "message_idx": midx, "note": note,
+        "created_at": created if created is not None else now, "updated_at": now,
+    }
+
+
+def list_annotations(conn, session_id: str) -> list[dict]:
+    """All annotations for a session, session-level note first then by message."""
+    rows = conn.execute(
+        "SELECT id, session_id, message_idx, note, created_at, updated_at "
+        "FROM annotations WHERE session_id=? ORDER BY message_idx ASC, id ASC",
+        (session_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_annotation(conn, annotation_id) -> dict:
+    try:
+        aid = int(annotation_id)
+    except (TypeError, ValueError):
+        return {"deleted": False, "id": annotation_id}
+    cur = conn.execute("DELETE FROM annotations WHERE id=?", (aid,))
+    _ann_fts_delete(conn, aid)
+    conn.commit()
+    return {"deleted": cur.rowcount > 0, "id": aid}
+
+
+def search_annotations(conn, query: str, limit: int = 50) -> list[dict]:
+    """Full-text search over annotation notes (FTS5). Returns matching notes with
+    their session title for deep-linking. Empty/garbled query → []."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    terms = [f'"{t}"' for t in q.replace('"', " ").split() if t]
+    if not terms:
+        return []
+    match = " ".join(terms[:-1] + [terms[-1] + "*"]) if terms else '""'
+    try:
+        rows = conn.execute(
+            "SELECT a.id, a.session_id, a.message_idx, a.note, "
+            "       COALESCE(s.title,'') AS session_title "
+            "FROM annotations_fts f "
+            "JOIN annotations a ON a.id = f.annotation_id "
+            "LEFT JOIN sessions s ON s.session_id = a.session_id "
+            "WHERE annotations_fts MATCH ? "
+            "ORDER BY rank LIMIT ?",
+            (match, max(1, int(limit))),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# prompt library  (a personal, reusable prompt collection — user state)
+# ---------------------------------------------------------------------------
+
+def upsert_prompt(conn, *, prompt_id=None, text: str, source: str = "manual",
+                  frequency: int = 1, starred=None) -> dict:
+    """Insert or update one library prompt. A new prompt gets a random hex id."""
+    text = str(text or "").strip()
+    if prompt_id:
+        pid = str(prompt_id)
+        existing = conn.execute(
+            "SELECT id, starred, frequency FROM prompt_library WHERE id=?", (pid,)
+        ).fetchone()
+    else:
+        pid, existing = uuid.uuid4().hex, None
+    star_val = (1 if starred else 0) if starred is not None else (
+        existing["starred"] if existing else 0
+    )
+    if existing:
+        conn.execute(
+            "UPDATE prompt_library SET text=?, source=?, frequency=?, starred=? WHERE id=?",
+            (text or "", source, int(frequency), int(star_val), pid),
+        )
+        created = None
+    else:
+        created = time.time()
+        conn.execute(
+            "INSERT INTO prompt_library(id, text, source, frequency, starred, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (pid, text, source, int(frequency), int(star_val), created),
+        )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, text, source, frequency, starred, created_at "
+        "FROM prompt_library WHERE id=?", (pid,)
+    ).fetchone()
+    d = dict(row)
+    d["starred"] = bool(d["starred"])
+    return d
+
+
+def list_prompts(conn, q: str | None = None, starred=None, limit: int = 200) -> list[dict]:
+    """List library prompts, optionally filtered by substring `q` and/or starred."""
+    where, args = ["1=1"], []
+    if q and q.strip():
+        where.append("text LIKE ? ESCAPE '\\'")
+        needle = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        args.append(f"%{needle}%")
+    if starred:
+        where.append("starred = 1")
+    clause = " AND ".join(where)
+    rows = conn.execute(
+        f"SELECT id, text, source, frequency, starred, created_at "
+        f"FROM prompt_library WHERE {clause} "
+        f"ORDER BY starred DESC, frequency DESC, created_at DESC "
+        f"LIMIT ?",
+        (*args, max(1, int(limit))),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["starred"] = bool(d["starred"])
+        out.append(d)
+    return out
+
+
+def delete_prompt(conn, prompt_id) -> dict:
+    cur = conn.execute("DELETE FROM prompt_library WHERE id=?", (str(prompt_id),))
+    conn.commit()
+    return {"deleted": cur.rowcount > 0, "id": prompt_id}

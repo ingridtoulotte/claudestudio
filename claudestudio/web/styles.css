@@ -647,3 +647,103 @@ mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================================ */
+/* v0.5.2 — health, git, annotations, budget, efficiency, prompts */
+/* ============================================================ */
+
+/* generic card used by the new views */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.card-h { font-size: 13px; font-weight: 650; color: var(--text-2); margin-bottom: 12px; }
+
+/* F10 — session health */
+.health-dot { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 9px; font-weight: 800; color: #0c0d10; margin-right: 7px; flex: 0 0 auto; }
+.health-dot.grade-A { background: var(--good); }
+.health-dot.grade-B { background: var(--teal); }
+.health-dot.grade-C { background: var(--warn); }
+.health-dot.grade-D { background: #e8843c; }
+.health-dot.grade-F { background: var(--bad); }
+.detail-context { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; margin: 14px 0 4px; }
+.health-card { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--line-2); border-radius: var(--radius-sm); padding: 10px 14px; min-width: 230px; }
+.health-card.grade-A { border-left-color: var(--good); }
+.health-card.grade-B { border-left-color: var(--teal); }
+.health-card.grade-C { border-left-color: var(--warn); }
+.health-card.grade-D { border-left-color: #e8843c; }
+.health-card.grade-F { border-left-color: var(--bad); }
+.hc-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.hc-grade { font-size: 20px; font-weight: 800; }
+.hc-score { font-size: 12px; color: var(--text-3); }
+.hc-bar { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+.hc-k { font-size: 10px; color: var(--text-3); width: 86px; flex: 0 0 auto; }
+.hc-track { flex: 1; height: 5px; background: var(--surface-3); border-radius: 3px; overflow: hidden; }
+.hc-fill { display: block; height: 100%; background: var(--accent); }
+
+/* F7 — git badge */
+.git-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 12px; font-family: var(--mono); color: var(--text-2); cursor: pointer; }
+.git-badge:hover { border-color: var(--line-2); color: var(--text); }
+.git-badge .gi { font-size: 11px; }
+
+/* F5 — annotations */
+.annotate { display: flex; align-items: flex-start; gap: 8px; flex: 1 1 280px; }
+.ann-k { font-size: 11px; color: var(--text-3); padding-top: 8px; flex: 0 0 auto; }
+.ann-input { flex: 1; min-height: 36px; resize: vertical; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; color: var(--text); font-family: var(--sans); font-size: 13px; }
+.ann-input:focus { outline: none; border-color: var(--accent); }
+.message-annotated { border-left: 2px solid var(--accent) !important; }
+
+/* F3 — budget */
+.budget-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 90; display: flex; align-items: center; justify-content: center; gap: 14px; background: linear-gradient(90deg, var(--bad), #e8843c); color: #fff; font-size: 13px; padding: 9px 16px; box-shadow: var(--shadow); }
+.budget-banner .bb-x { background: rgba(255,255,255,.2); border: 0; color: #fff; width: 22px; height: 22px; border-radius: 50%; cursor: pointer; font-size: 14px; }
+.budget-widget { display: flex; gap: 20px; align-items: center; }
+.bw-arc { flex: 0 0 auto; }
+.bw-form { flex: 1; }
+.bw-line { font-size: 14px; }
+.bw-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.bw-controls { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.bw-input { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 7px 10px; color: var(--text); font-size: 13px; max-width: 120px; }
+
+/* F6 — efficiency */
+.eff-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.eff-kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+.eff-kpi-v { font-size: 24px; font-weight: 720; letter-spacing: -.5px; }
+.eff-kpi-l { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.eff-bars { display: flex; flex-direction: column; gap: 8px; }
+.eff-row { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 3px 4px; border-radius: var(--radius-sm); }
+.eff-row:hover { background: var(--surface-2); }
+.eff-name { width: 160px; flex: 0 0 auto; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eff-track { flex: 1; height: 8px; background: var(--surface-3); border-radius: 4px; overflow: hidden; }
+.eff-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.eff-val { width: 64px; flex: 0 0 auto; text-align: right; font-size: 11px; color: var(--text-3); }
+
+/* F8 — prompt library */
+.prompt-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.prompt-search, .prompt-add { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 11px; color: var(--text); font-size: 13px; }
+.prompt-search { flex: 1; min-width: 180px; }
+.prompt-add { flex: 1; min-width: 180px; }
+.prompt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.prompt-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.pc-head { display: flex; align-items: center; gap: 8px; }
+.pc-star { background: none; border: 0; cursor: pointer; color: var(--text-3); font-size: 15px; }
+.pc-star.on { color: var(--warn); }
+.pc-src { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); }
+.pc-freq { margin-left: auto; font-size: 11px; color: var(--accent); }
+.pc-text { font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; }
+.pc-actions { display: flex; gap: 8px; margin-top: auto; }
+
+/* F4 — CLAUDE.md modal */
+.cs-modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.cs-modal { background: var(--elevated); border: 1px solid var(--line-2); border-radius: var(--radius); width: min(760px, 100%); max-height: 84vh; display: flex; flex-direction: column; box-shadow: var(--shadow); }
+.cs-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 650; }
+.cs-modal-x { background: none; border: 0; color: var(--text-3); font-size: 20px; cursor: pointer; }
+.cs-modal-body { margin: 0; padding: 18px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; color: var(--text-2); }
+.cs-modal-foot { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; }
+
+/* F12 — keyboard cheat sheet */
+.kbd-cheat { position: fixed; inset: 0; z-index: 110; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.kbd-cheat-panel { background: var(--elevated); border: 1px solid var(--line-2); border-radius: var(--radius); width: min(520px, 100%); padding: 6px 20px 20px; box-shadow: var(--shadow); }
+.kbd-cheat-head { display: flex; align-items: center; justify-content: space-between; font-weight: 650; padding: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.kbd-cheat-x { background: none; border: 0; color: var(--text-3); font-size: 20px; cursor: pointer; }
+.kbd-cheat-group h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); }
+.kbd-cheat-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; font-size: 13px; }
+.kbd-cheat-row kbd { background: var(--surface-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 7px; font-family: var(--mono); font-size: 11px; min-width: 20px; text-align: center; }
+
+.budget-arc { display: block; }

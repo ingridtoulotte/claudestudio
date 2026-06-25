@@ -553,7 +553,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 8, "mcp exposes 8 tools")
+        c.eq(len(tl["result"]["tools"]), 10, "mcp exposes 10 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -607,7 +607,204 @@ def run() -> int:
         parsed = json.loads(jx["text"])
         c.eq(parsed["session_id"], "rec1", "json export round-trips the session id")
         c.ok("timeline" in parsed, "json export includes the timeline")
+
+        # =================================================================
+        # v0.5.1 features
+        # =================================================================
+        from . import hook as hookmod
+        from . import patterns as patmod
+        from . import report as reportmod
+        from . import server as servermod
+
+        # --- F11: version embedded everywhere ----------------------------
+        c.eq(claudestudio.__version__, "0.5.1", "package version bumped to 0.5.1")
+        c.eq(init["result"]["serverInfo"]["version"], "0.5.1", "mcp serverInfo is 0.5.1")
+        rc, out = _run(["info", "--db", db])
+        c.eq(rc, 0, "cli info exits 0")
+        c.ok("0.5.1" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "10" in out, "cli info reports the 10 MCP tools")
+
+        # --- F3: inline unified diff (pure tool_diff) --------------------
+        d_edit, trunc = api.tool_diff(
+            "Edit", {"file_path": "a.py", "old_string": "x = 1\ny = 2",
+                     "new_string": "x = 1\ny = 3"})
+        c.eq(d_edit, "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3",
+             "tool_diff renders an exact unified diff for an Edit")
+        c.ok(d_edit.startswith("---") and "\n+y = 3" in d_edit, "diff has --- header and + line")
+        c.eq(trunc, False, "small diff is not truncated")
+        d_new, _ = api.tool_diff("Write", {"file_path": "n.py", "content": "a\nb"})
+        c.eq(d_new, "--- a/n.py\n+++ b/n.py\n@@ -0,0 +1,2 @@\n+a\n+b",
+             "tool_diff renders create (empty→content) for Write")
+        c.eq(api.tool_diff("Read", {"path": "z"}), (None, False),
+             "tool_diff is None for a non-edit tool")
+        c.eq(api.tool_diff("Edit", {"old_string": "same", "new_string": "same"}),
+             (None, False), "tool_diff is None when nothing changed")
+        # integration: get_session attaches a diff to the edit tool
+        _mk_session(hconn, "df", title="diff demo", msg_count=1)
+        _mk_msg(hconn, "df", "change a file", seq=0)
+        _mk_tool(hconn, "df", "Edit", seq=0,
+                 inp={"file_path": "z.py", "old_string": "a\nb", "new_string": "a\nc"})
+        hconn.commit()
+        dfdetail = api.get_session(hconn, "df")
+        dtool = dfdetail["timeline"][0]["tools"][0]
+        c.ok(dtool.get("diff", "").startswith("---"), "get_session attaches a diff to the edit")
+        c.ok("diff_truncated" in dtool, "get_session flags diff truncation state")
+
+        # --- F2: per-message bookmarks -----------------------------------
+        c.eq(index.list_bookmarks(hconn), [], "no bookmarks initially")
+        bk = api.add_bookmark(hconn, "mara", {"seq": 2, "note": "look here"})
+        c.ok(bk["id"] and bk["seq"] == 2, "add_bookmark returns id + seq")
+        c.eq(bk["note"], "look here", "bookmark note round-trips")
+        allbk = api.list_bookmarks(hconn)["bookmarks"]
+        c.eq(len(allbk), 1, "one bookmark listed")
+        c.eq(allbk[0]["session_title"], "Big refactor", "bookmark carries session title")
+        c.eq(len(api.list_bookmarks(hconn, "mara")["bookmarks"]), 1, "bookmark filter by session")
+        c.eq(api.list_bookmarks(hconn, "nope")["bookmarks"], [], "bookmark filter excludes others")
+        c.eq(api.delete_bookmark(hconn, bk["id"])["deleted"], True, "bookmark deleted")
+        c.eq(index.list_bookmarks(hconn), [], "bookmarks empty after delete")
+        c.eq(api.delete_bookmark(hconn, "ghost")["deleted"], False, "deleting unknown bookmark → False")
+
+        # --- F6: per-tool latency ----------------------------------------
+        _mk_session(hconn, "lat", title="latency", msg_count=6, last_epoch=1_700_000_000.0)
+        for _k, (_s, _e) in enumerate([(1000.0, 1001.0), (2000.0, 2002.0), (3000.0, 3003.0)]):
+            _a, _u = _k * 2, _k * 2 + 1
+            hconn.execute("INSERT INTO messages(uuid,session_id,role,seq,epoch,text) "
+                          "VALUES(?,?,?,?,?,?)", (f"lat:{_a}", "lat", "assistant", _a, _s, ""))
+            hconn.execute("INSERT INTO messages(uuid,session_id,role,seq,epoch,text) "
+                          "VALUES(?,?,?,?,?,?)", (f"lat:{_u}", "lat", "user", _u, _e, ""))
+            _mk_tool(hconn, "lat", "Bash", seq=_a)
+        hconn.commit()
+        lat = analytics.tool_latency(hconn)
+        c.ok("Bash" in lat, "tool_latency surfaces the timed tool")
+        c.eq(lat["Bash"]["count"], 3, "tool_latency counts the timed calls")
+        c.close(lat["Bash"]["p50_ms"], 2000.0, "tool_latency p50 within 5%", tol=100.0)
+        c.eq(lat["Bash"]["max_ms"], 3000.0, "tool_latency max is exact")
+        c.eq(api.tool_latency_payload(hconn)["latency"]["Bash"]["count"], 3,
+             "tool_latency_payload wraps the dict")
+
+        # --- F8: prompt patterns -----------------------------------------
+        _pbase = "please write unit tests for the auth module now"
+        for _i in range(5):
+            _sid = f"pat{_i}"
+            _mk_session(hconn, _sid, title=f"tests {_i}", msg_count=2,
+                        last_epoch=1_700_000_000.0 + _i)
+            hconn.execute(
+                "INSERT INTO messages(uuid,session_id,role,seq,epoch,text) VALUES(?,?,?,?,?,?)",
+                (f"{_sid}:0", _sid, "user", 0, 1_700_000_000.0 + _i,
+                 (_pbase + " " + "again " * _i).strip()))
+        hconn.commit()
+        pats = patmod.extract_patterns(hconn, min_count=3)
+        c.ok(pats, "extract_patterns finds a cluster")
+        _auth = [p for p in pats if "auth module" in p["canonical_text"]]
+        c.ok(_auth, "extract_patterns clusters the auth-tests prompts")
+        c.eq(_auth[0]["count"], 5, "the recurring prompt is counted 5 times")
+        c.ok(_pbase in _auth[0]["canonical_text"], "canonical text matches the prompt shape")
+        c.ok(0.0 < _auth[0]["similarity_score"] <= 1.0, "pattern similarity score is a fraction")
+        c.eq(api.prompt_patterns(hconn, {"min_count": 99})["patterns"], [],
+             "prompt_patterns honours min_count")
+
+        # --- F4: activity report -----------------------------------------
+        _lo, _hi = 0.0, 9_000_000_000.0
+        rd = reportmod.report_data(hconn, _lo, _hi, "Sprint Report")
+        _exp_sessions = hconn.execute(
+            "SELECT COUNT(*) n, COALESCE(SUM(cost_usd),0) c FROM sessions "
+            "WHERE last_epoch>=? AND last_epoch<?", (_lo, _hi)).fetchone()
+        c.eq(rd["totals"]["sessions"], _exp_sessions["n"], "report session count is exact")
+        c.close(rd["totals"]["cost_usd"], _exp_sessions["c"], "report cost is exact")
+        rep_html = reportmod.generate_report(hconn, _lo, _hi, "Sprint Report", "html")
+        c.ok("Sprint Report" in rep_html, "report HTML carries the title")
+        c.ok("Top projects" in rep_html and "Top tools" in rep_html
+             and "Notable sessions" in rep_html, "report HTML has its section headings")
+        c.ok("@media print" in rep_html, "report HTML is print-optimized")
+        rep_md = reportmod.generate_report(hconn, _lo, _hi, "Sprint Report", "md")
+        c.ok(rep_md.startswith("# Sprint Report"), "report markdown starts with the title")
+        rj = api.report_json(hconn, {"since": "1970-01-01", "until": "2200-01-01"})
+        c.ok("totals" in rj and "top_projects" in rj, "report_json returns structured data")
+
+        # --- F9: CSV exports ---------------------------------------------
+        scsv = api.sessions_csv(hconn)
+        _nsess = hconn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        c.eq(len(scsv.strip().splitlines()), _nsess + 1, "sessions CSV has header + one row each")
+        c.ok(scsv.splitlines()[0].startswith("session_id,title"), "sessions CSV header columns")
+        acsv = api.analytics_csv(hconn)
+        for _sec in ("# Overview", "# By model", "# By tool", "# Daily activity", "# Top projects"):
+            c.ok(_sec in acsv, f"analytics CSV has the {_sec!r} section")
+
+        # --- F1: SSE packing + watch mtime scan --------------------------
+        c.eq(servermod.sse_pack({"type": "reindex", "ts": 123}),
+             'data: {"type": "reindex", "ts": 123}\n\n', "sse_pack frames JSON as one SSE event")
+        c.ok(index.index_db_mtime(hdb) > 0, "index_db_mtime reads an existing index")
+        c.eq(index.index_db_mtime(os.path.join(tmp, "nope.db")), 0.0,
+             "index_db_mtime is 0 for a missing index")
+        c.ok(index.newest_source_mtime(root) > 0, "newest_source_mtime finds the fixture files")
+        c.eq(index.newest_source_mtime(os.path.join(tmp, "empty-root")), 0.0,
+             "newest_source_mtime is 0 for an empty/absent root")
+
+        # --- F5: hook install / status / uninstall (mocked settings) -----
+        _hookcfg = os.path.join(tmp, "settings.json")
+        r1 = hookmod.install_hook(_hookcfg)
+        c.ok(r1["changed"] and r1["installed"], "install_hook writes the hook")
+        c.ok(hookmod.is_installed(hookmod._load_settings(_hookcfg)), "hook present after install")
+        r2 = hookmod.install_hook(_hookcfg)
+        c.eq(r2["changed"], False, "install_hook is idempotent (no duplicate)")
+        _g = hookmod._load_settings(_hookcfg)["hooks"][hookmod.HOOK_EVENT]
+        c.eq(len(_g), 1, "install_hook leaves exactly one hook group")
+        c.ok(hookmod.hook_status(_hookcfg)["installed"], "hook_status reports installed")
+        r3 = hookmod.uninstall_hook(_hookcfg)
+        c.ok(r3["changed"] and not r3["installed"], "uninstall_hook removes the hook")
+        c.eq(hookmod._load_settings(_hookcfg), {}, "uninstall prunes back to a clean settings file")
+        # a foreign hook is preserved across install/uninstall
+        with open(_hookcfg, "w", encoding="utf-8") as _fh:
+            json.dump({"hooks": {"SessionEnd": [{"hooks": [
+                {"type": "command", "command": "echo keepme"}]}]}}, _fh)
+        hookmod.install_hook(_hookcfg)
+        hookmod.uninstall_hook(_hookcfg)
+        _after = hookmod._load_settings(_hookcfg)
+        c.ok(any(h.get("command") == "echo keepme"
+                 for grp in _after["hooks"]["SessionEnd"] for h in grp["hooks"]),
+             "uninstall never clobbers a pre-existing hook")
+
+        # --- F8/F2: the two new MCP tools dispatch -----------------------
+        names = {t["name"] for t in tl["result"]["tools"]}
+        c.ok({"list_bookmarks", "get_prompt_patterns"} <= names,
+             "mcp exposes list_bookmarks + get_prompt_patterns")
+        lbk, err = _call("list_bookmarks", {})
+        c.ok(not err and "bookmarks" in lbk, "mcp list_bookmarks returns bookmarks")
+        gpp, err = _call("get_prompt_patterns", {"min_count": 3})
+        c.ok(not err and "patterns" in gpp, "mcp get_prompt_patterns returns patterns")
+
         hconn.close()
+
+        # --- F7: multi-root indexing (own db so ids stay distinct) -------
+        def _write_min(rt, sid, proj):
+            d = os.path.join(rt, proj)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, f"{sid}.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "type": "user", "uuid": sid + "u", "parentUuid": None,
+                    "sessionId": sid, "cwd": "/x", "timestamp": "2026-06-01T10:00:00Z",
+                    "message": {"role": "user", "content": "hello " + sid}}) + "\n")
+
+        root_a = os.path.join(tmp, "root-a")
+        root_b = os.path.join(tmp, "root-b")
+        _write_min(root_a, "mra1", "projA")
+        _write_min(root_a, "mra2", "projA")
+        _write_min(root_b, "mrb1", "projB")
+        mrdb = os.path.join(tmp, "mr.db")
+        mrconn = index.connect(mrdb)
+        mrstats = index.reindex(mrconn, [root_a, root_b])
+        c.eq(mrstats["added"], 3, "multi-root indexes every root's sessions")
+        c.eq(set(mrstats["roots"]), {root_a, root_b}, "reindex records both roots")
+        c.eq(index.session_summary(mrconn)["sessions"], 3, "combined session count")
+        c.eq(api.list_sessions(mrconn, {"root": root_a})["total"], 2,
+             "root filter returns only root-a sessions")
+        c.eq(api.list_sessions(mrconn, {"root": root_b})["total"], 1,
+             "root filter returns only root-b sessions")
+        rcounts = {r["root"]: r["sessions"] for r in index.root_counts(mrconn)}
+        c.eq(rcounts.get(root_a), 2, "root_counts tallies root-a")
+        c.eq(rcounts.get(root_b), 1, "root_counts tallies root-b")
+        c.eq(index.stored_schema_version(mrconn), 2, "multi-root index is schema v2")
+        mrconn.close()
 
     # --- web assets: guard the SPA wiring the UI behaviors depend on ------
     # The behaviors themselves are JS/CSS (exercised in a browser), but these
@@ -645,6 +842,82 @@ def run() -> int:
     c.ok(":focus-visible" in css, "css: focus-visible ring for keyboard users")
     c.ok(".tool-card.error" in css, "css: tool errors visually emphasized")
     c.ok("sendBtn.disabled" in app_js, "ask: submit disabled when query empty")
+
+    # --- v0.5.1 web wiring -------------------------------------------------
+    with open(os.path.join(web_dir, "index.html"), encoding="utf-8") as fh:
+        index_html = fh.read()
+    # F1: live SSE updates
+    c.ok("EventSource('/api/events')" in app_js, "app.js: opens the SSE events stream")
+    c.ok("startLiveUpdates" in app_js and "showReindexToast" in app_js,
+         "app.js: live reindex toast wired")
+    # F2: bookmarks
+    c.ok("bookmarkButton(" in app_js and "openBookmarkPopover(" in app_js,
+         "app.js: per-message bookmark UI present")
+    c.ok("/api/session/' + encodeURIComponent(id) + '/bookmark" in app_js,
+         "app.js: bookmark POST endpoint wired")
+    c.ok("async function viewBookmarks(" in app_js, "app.js: global bookmarks view exists")
+    c.ok(".bm-btn" in css and ".bm-pop" in css, "css: bookmark button + popover styled")
+    # F3: inline diff
+    c.ok("function diffNode(" in app_js, "app.js: unified-diff renderer exists")
+    c.ok("t.diff" in app_js and "diff-toggle" in app_js, "app.js: Diff/Raw toggle wired")
+    c.ok(".diff-view" in css and ".dl.add" in css and ".dl.del" in css,
+         "css: diff lines styled (add/del)")
+    # F4: report
+    c.ok("function reportPanel(" in app_js and "API.reportUrl(" in app_js,
+         "app.js: report generator wired")
+    c.ok(".report-bar" in css, "css: report toolbar styled")
+    # F6: latency
+    c.ok("function latencyChart(" in app_js and "/api/tools/latency" in app_js,
+         "app.js: latency chart wired to the endpoint")
+    c.ok(".lat-fill.good" in css and ".lat-fill.bad" in css, "css: latency bars color-banded")
+    # F8: patterns
+    c.ok("function patternsList(" in app_js and "/api/prompts/patterns" in app_js,
+         "app.js: patterns list wired to the endpoint")
+    # F9: CSV download
+    c.ok("analyticsCsvUrl" in app_js and "sessionsCsvUrl" in app_js,
+         "app.js: CSV export buttons wired")
+    # F12: accessibility
+    c.ok("prefers-reduced-motion" in css, "css: honours prefers-reduced-motion")
+    c.ok('role="navigation"' in index_html and 'role="main"' in index_html
+         and 'role="complementary"' in index_html, "index.html: landmark roles present")
+    c.ok("k === ' '" in app_js and "replay.toggle()" in app_js,
+         "app.js: Space toggles replay play/pause")
+    c.ok("'ArrowLeft'" in app_js and "'ArrowRight'" in app_js,
+         "app.js: arrow keys step the replay")
+
+    # every <button> in the shipped shell has an accessible name (text/aria/title)
+    import html.parser as _hp
+
+    class _BtnAudit(_hp.HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.depth = 0
+            self.named = True
+            self._txt = []
+            self._attrs = {}
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "button":
+                self.depth += 1
+                self._attrs = dict(attrs)
+                self._txt = []
+
+        def handle_data(self, data):
+            if self.depth:
+                self._txt.append(data)
+
+        def handle_endtag(self, tag):
+            if tag == "button" and self.depth:
+                self.depth -= 1
+                has_name = ("".join(self._txt).strip()
+                            or self._attrs.get("aria-label")
+                            or self._attrs.get("title"))
+                if not has_name:
+                    self.named = False
+
+    audit = _BtnAudit()
+    audit.feed(index_html)
+    c.ok(audit.named, "a11y: every button in index.html has an accessible name")
 
     total = c.passed + c.failed
     print(f"\n  selftest: {c.passed}/{total} checks passed")

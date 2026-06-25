@@ -64,7 +64,25 @@ BANNER = rf"""
 
 def _add_common(p):
     p.add_argument("--db", default=index.default_db_path(), help="index database path")
-    p.add_argument("--root", default=None, help="Claude projects root to scan")
+    p.add_argument(
+        "--root", default=None,
+        help="Claude projects root(s) to scan. Pass several with your platform's "
+             f"path separator ({os.pathsep!r}), e.g. --root pathA{os.pathsep}pathB",
+    )
+
+
+def _split_roots(raw):
+    """Parse a --root value into a list of roots (or None for the default).
+
+    Multiple roots are separated by ``os.pathsep`` — ``;`` on Windows, ``:`` on
+    POSIX — which never collides with a Windows drive letter (``C:\\…``) the way a
+    hard-coded ``:`` split would. Returns None when no root was given so the
+    indexer falls back to the default projects root.
+    """
+    if not raw:
+        return None
+    parts = [p for p in str(raw).split(os.pathsep) if p]
+    return parts or None
 
 
 def _progress(done, total):
@@ -78,7 +96,7 @@ def cmd_index(args):
     conn = index.connect(args.db)
     print(BANNER)
     t0 = time.time()
-    stats = index.reindex(conn, args.root, force=args.force, progress=_progress)
+    stats = index.reindex(conn, _split_roots(args.root), force=args.force, progress=_progress)
     print()
     dt = time.time() - t0
     print(f"  scanned {stats['files']} files in {dt:.1f}s")
@@ -96,15 +114,16 @@ def cmd_index(args):
 
 
 def cmd_serve(args):
+    roots = _split_roots(args.root)
     if not os.path.exists(args.db):
         print("  No index yet — building one first…")
         conn = index.connect(args.db)
-        index.reindex(conn, args.root, progress=_progress)
+        index.reindex(conn, roots, progress=_progress)
         print()
         conn.close()
     print(BANNER)
     _warn_if_public_host(args.host)
-    server.serve(args.db, args.root, host=args.host, port=args.port,
+    server.serve(args.db, roots, host=args.host, port=args.port,
                  open_browser=not args.no_browser)
     return 0
 
@@ -117,8 +136,48 @@ def cmd_wrapped(args):
     return 0
 
 
+def _export_all(conn, args) -> int:
+    """Export every indexed session into a directory, with progress + skip logic."""
+    fmt = args.format
+    out_dir = pathlib.Path(args.out_dir or "claudestudio-export").expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ids: list[str] = []
+    offset = 0
+    while True:
+        page = api.list_sessions(conn, {"archived": "all", "limit": 500, "offset": offset})
+        ids.extend(s["session_id"] for s in page["sessions"])
+        offset += 500
+        if offset >= page.get("total", 0) or not page["sessions"]:
+            break
+    total = len(ids)
+    written = skipped = 0
+    for i, sid in enumerate(ids, 1):
+        out = api.export_session(conn, sid, fmt)
+        if out is None:
+            continue
+        dest = out_dir / f"{sid[:8]}-{out['filename']}"
+        if dest.exists() and not args.force:
+            skipped += 1
+        else:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(out["text"])
+            written += 1
+        sys.stdout.write(f"\r  exporting  {i}/{total}  ({written} written, {skipped} skipped)")
+        sys.stdout.flush()
+    conn.close()
+    print(f"\n  → {written} session(s) exported to {out_dir}"
+          + (f" ({skipped} already present)" if skipped else ""))
+    return 0
+
+
 def cmd_export(args):
     conn = index.connect(args.db)
+    if getattr(args, "all", False):
+        return _export_all(conn, args)
+    if not args.session_id:
+        conn.close()
+        print("  Provide a session id, or use --all to export every session.")
+        return 1
     out = api.export_session(conn, args.session_id, args.format)
     conn.close()
     if out is None:
@@ -136,6 +195,73 @@ def cmd_export(args):
     return 0
 
 
+def cmd_watch(args):
+    """Poll the projects root(s) and reindex whenever a session file changes.
+
+    A foreground companion to `serve`: pair them (in two terminals) for live,
+    hands-free updates. Exits cleanly on Ctrl-C. Pure polling (no inotify) so it
+    behaves identically on every OS.
+    """
+    roots = _split_roots(args.root)
+    interval = max(1.0, float(args.interval))
+    if not os.path.exists(args.db):
+        print("  No index yet — building one first…")
+        conn = index.connect(args.db)
+        index.reindex(conn, roots, progress=_progress)
+        print()
+        conn.close()
+    print(BANNER)
+    shown = [index.normalize_roots(roots)]
+    print(f"  watching {', '.join(shown[0])}")
+    print(f"  polling every {interval:.0f}s · Ctrl-C to stop\n")
+    last_seen = index.newest_source_mtime(roots)
+    try:
+        while True:
+            time.sleep(interval)
+            newest = index.newest_source_mtime(roots)
+            if newest <= last_seen:
+                continue
+            last_seen = newest
+            conn = index.connect(args.db)
+            stats = index.reindex(conn, roots)
+            conn.close()
+            stamp = _dt.datetime.now().strftime("%H:%M:%S")
+            print(f"  [{stamp}] reindexed — +{stats['added']} new, "
+                  f"{stats['updated']} updated, {stats['skipped']} unchanged")
+    except KeyboardInterrupt:
+        print("\n  Stopped watching.")
+    return 0
+
+
+def cmd_report(args):
+    """Generate a shareable HTML/Markdown activity report for a date range."""
+    from . import report
+    conn = index.connect(args.db)
+    params = {}
+    if args.since:
+        params["since"] = args.since
+    if args.until:
+        params["until"] = args.until
+    since, until, title = api.report_range(params)
+    fmt = "md" if args.format in ("md", "markdown") else "html"
+    text = report.generate_report(conn, since, until, title, fmt)
+    conn.close()
+    if args.out == "-":
+        sys.stdout.write(text)
+        return 0
+    if args.out:
+        dest = _safe_out_path(args.out, f"claudestudio_report.{fmt}")
+    else:
+        date = _dt.date.today().isoformat()
+        dest = pathlib.Path(os.path.expanduser("~")) / f"claudestudio_report_{date}.{fmt}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    print(f"  report → {dest}  ({len(text):,} bytes)")
+    print(f"  range  : {_fmt_day(since)} → {_fmt_day(until)}")
+    return 0
+
+
 def cmd_mcp(args):
     """Launch the MCP server (JSON-RPC 2.0 over stdio).
 
@@ -146,7 +272,7 @@ def cmd_mcp(args):
     if not os.path.exists(args.db):
         print("  No index yet — building one first…", file=sys.stderr)
         conn = index.connect(args.db)
-        index.reindex(conn, args.root)
+        index.reindex(conn, _split_roots(args.root))
         conn.close()
     return mcp.serve_stdio(args.db)
 
@@ -188,11 +314,14 @@ def cmd_highlights(args):
 
 def cmd_doctor(args):
     print(BANNER)
-    root = args.root or _parser.default_projects_root()
-    print(f"  projects root : {root}")
-    print(f"  exists        : {os.path.isdir(root)}")
-    files = list(_parser.iter_session_files(root)) if os.path.isdir(root) else []
-    print(f"  session files : {len(files)}")
+    roots = _split_roots(args.root) or [_parser.default_projects_root()]
+    total_files = 0
+    for r in roots:
+        exists = os.path.isdir(r)
+        n = len(list(_parser.iter_session_files(r))) if exists else 0
+        total_files += n
+        print(f"  projects root : {r}  ({'exists' if exists else 'missing'}, {n} files)")
+    print(f"  session files : {total_files}")
     print(f"  index db      : {args.db}")
     print(f"  index exists  : {os.path.exists(args.db)}")
     try:
@@ -207,8 +336,14 @@ def cmd_doctor(args):
     age = pricing.price_table_age_days()
     flag = "STALE ⚠" if pricing.is_price_table_stale() else "ok ✓"
     print(f"  pricing data  : {flag} (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
-    from . import mcp
+    from . import hook, mcp
     print(f"  mcp server    : {len(mcp.TOOLS)} tools (run `claudestudio mcp`)")
+    hst = hook.hook_status(db_path=args.db)
+    if hst["installed"]:
+        print(f"  hook          : installed ✓ ({hook.HOOK_EVENT} → {hook.HOOK_COMMAND})")
+    else:
+        print("  hook          : not installed ⚠ — run `claudestudio hook install` "
+              "to auto-reindex")
     if os.path.exists(args.db):
         conn = index.connect(args.db)
         s = index.session_summary(conn)
@@ -216,7 +351,116 @@ def cmd_doctor(args):
               f"(current {index.SCHEMA_VERSION})")
         print(f"  indexed       : {s['sessions']:,} sessions, "
               f"{s['messages']:,} messages")
+        rc = index.root_counts(conn)
+        if len(rc) > 1:
+            for r in rc:
+                print(f"  indexed root  : {r['root']}  ({r['sessions']} sessions)")
         conn.close()
+    return 0
+
+
+def cmd_hook(args):
+    """Install / inspect / remove the Claude Code post-session reindex hook."""
+    from . import hook
+    action = args.action or "status"
+    if action == "install":
+        res = hook.install_hook()
+        print(BANNER)
+        if res["changed"]:
+            print(f"  ✓ Installed the post-session hook into {res['path']}")
+        else:
+            print(f"  ✓ Hook already installed in {res['path']} (no change)")
+        print(f"\n  Claude Code will now run `{hook.HOOK_COMMAND}` on `{hook.HOOK_EVENT}`.")
+        print("  Exact settings.json content:\n")
+        for line in json.dumps(res["settings"], indent=2).splitlines():
+            print("    " + line)
+        print("\n  Tip: pair it with `claudestudio watch` for live in-app updates.")
+        return 0
+    if action == "uninstall":
+        res = hook.uninstall_hook()
+        print(BANNER)
+        print(f"  ✓ Removed the hook from {res['path']}" if res["changed"]
+              else f"  Hook was not installed in {res['path']} (nothing to do)")
+        return 0
+    # status
+    st = hook.hook_status(db_path=args.db)
+    print(BANNER)
+    print(f"  settings.json : {st['settings_path']}")
+    print(f"  installed     : {st['installed']}")
+    print(f"  event/command : {st['event']} → {st['command']}")
+    if st["installed"]:
+        when = _fmt_day(st["last_run_epoch"]) if st["last_run_epoch"] else "never"
+        print(f"  last index run: {when}")
+    else:
+        print("  install it    : claudestudio hook install")
+    return 0
+
+
+def _configured_roots(conn) -> list[str]:
+    """All projects roots recorded in the index (multi-root aware).
+
+    Reads the `roots` meta key written by reindex; falls back to the single
+    `root` key (and finally the default) so an older index still reports one.
+    """
+    row = conn.execute("SELECT value FROM meta WHERE key='roots'").fetchone()
+    if row and row[0]:
+        try:
+            roots = json.loads(row[0])
+            if isinstance(roots, list) and roots:
+                return [str(r) for r in roots]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    row = conn.execute("SELECT value FROM meta WHERE key='root'").fetchone()
+    return [row[0]] if row and row[0] else [_parser.default_projects_root()]
+
+
+def _mcp_snippet() -> str:
+    return json.dumps(
+        {"mcpServers": {"claudestudio": {"command": "claudestudio-mcp", "args": []}}},
+        indent=2,
+    )
+
+
+def cmd_info(args):
+    """Full environment summary — paste this into a bug report."""
+    import platform as _platform
+
+    from . import hook, mcp
+    print(f"  claudestudio  {__version__}")
+    print(f"  python        {sys.version.split()[0]}  ({_platform.python_implementation()})")
+    print(f"  platform      {_platform.platform()}")
+    print(f"  index db      {args.db}")
+    exists = os.path.exists(args.db)
+    print(f"  index exists  {exists}")
+    if exists:
+        size = os.path.getsize(args.db)
+        print(f"  index size    {size:,} bytes")
+        conn = index.connect(args.db)
+        s = index.session_summary(conn)
+        print(f"  sessions      {s['sessions']:,}  ({s['messages']:,} messages)")
+        print(f"  schema ver    {index.stored_schema_version(conn)} "
+              f"(current {index.SCHEMA_VERSION})")
+        for r in _configured_roots(conn):
+            n = conn.execute(
+                "SELECT COUNT(DISTINCT session_id) n FROM sources WHERE root=?", (r,)
+            ).fetchone()
+            cnt = n["n"] if n and n["n"] else 0
+            print(f"  root          {r}  ({cnt} sessions)")
+        conn.close()
+    try:
+        import sqlite3
+        cx = sqlite3.connect(":memory:")
+        cx.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+        print("  fts5          available")
+    except sqlite3.OperationalError:
+        print("  fts5          MISSING (search degraded)")
+    st = hook.hook_status()
+    print(f"  hook          {'installed' if st['installed'] else 'not installed'}"
+          + (f" (last ran {_fmt_day(st['last_run_epoch'])})" if st.get("last_run_epoch") else ""))
+    print(f"  mcp tools     {len(mcp.TOOLS)} (run `claudestudio mcp`)")
+    print("\n  Register the MCP server with Claude Code (~/.claude.json):")
+    for line in _mcp_snippet().splitlines():
+        print("    " + line)
     return 0
 
 
@@ -387,7 +631,8 @@ def build_parser():
         prog="claudestudio",
         description="The desktop workspace for Claude Code.",
     )
-    ap.add_argument("--version", action="version", version=f"ClaudeStudio {__version__}")
+    ap.add_argument("-V", "--version", action="version",
+                    version=f"claudestudio {__version__}")
     ap.add_argument("--selftest", action="store_true", help="run built-in correctness checks")
     sub = ap.add_subparsers(dest="command")
 
@@ -444,12 +689,32 @@ def build_parser():
     p.add_argument("--year", type=int, default=None)
     p.set_defaults(func=cmd_wrapped)
 
-    p = sub.add_parser("export", help="export a session to Markdown or standalone HTML")
+    p = sub.add_parser("export", help="export a session (or all) to Markdown / HTML / JSON")
     _add_common(p)
-    p.add_argument("session_id", help="session id (see `serve` or `index`)")
+    p.add_argument("session_id", nargs="?", default=None,
+                   help="session id (see `serve` or `index`); omit with --all")
     p.add_argument("--format", choices=["md", "markdown", "html", "json"], default="md")
     p.add_argument("--out", default=None, help="output file ('-' for stdout)")
+    p.add_argument("--all", action="store_true", help="export every indexed session")
+    p.add_argument("--out-dir", default=None,
+                   help="destination directory for --all (default: ./claudestudio-export)")
+    p.add_argument("--force", action="store_true",
+                   help="with --all, overwrite files that already exist")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("report", help="generate a shareable HTML/Markdown activity report")
+    _add_common(p)
+    p.add_argument("--since", default=None, help="range start (YYYY-MM-DD); default: this week")
+    p.add_argument("--until", default=None, help="range end (YYYY-MM-DD); default: this week")
+    p.add_argument("--format", choices=["html", "md", "markdown"], default="html")
+    p.add_argument("--out", default=None, help="output file ('-' for stdout)")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("watch", help="auto-reindex as sessions change (live mode)")
+    _add_common(p)
+    p.add_argument("--interval", type=float, default=5.0,
+                   help="seconds between polls (default 5)")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("mcp", help="run the MCP server (JSON-RPC 2.0 over stdio)")
     _add_common(p)
@@ -467,6 +732,17 @@ def build_parser():
     p = sub.add_parser("stats", help="print headline numbers")
     _add_common(p)
     p.set_defaults(func=cmd_stats)
+
+    p = sub.add_parser("info", help="full environment summary (for bug reports)")
+    _add_common(p)
+    p.set_defaults(func=cmd_info)
+
+    p = sub.add_parser("hook", help="auto-reindex when Claude Code finishes a session")
+    _add_common(p)
+    p.add_argument("action", nargs="?", default="status",
+                   choices=["install", "status", "uninstall"],
+                   help="install (default: status)")
+    p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("demo", help="generate synthetic data and explore it")
     p.add_argument("--count", type=int, default=48)

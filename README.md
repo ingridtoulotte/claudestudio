@@ -14,9 +14,13 @@ Explore, search, replay, and understand every Claude Code session — all on you
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-9a8cff)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
+[![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
+[![Discussions](https://img.shields.io/github/discussions/ingridtoulotte/claudestudio)](https://github.com/ingridtoulotte/claudestudio/discussions)
+[![Last Commit](https://img.shields.io/github/last-commit/ingridtoulotte/claudestudio)](https://github.com/ingridtoulotte/claudestudio/commits/main)
 [![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
-[Highlights](#-highlights) · [Quickstart](#-quickstart) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [How it works](#-how-it-works) · [CLI](#-cli) · [Privacy](#-privacy--trust) · [FAQ](#-faq)
+[Highlights](#-highlights) · [Quickstart](#-quickstart) · [Auto-index (hooks)](#-auto-index-with-claude-code-hooks) · [Live updates](#-live-updates) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [CLI](#-cli) · [Community](#-community) · [FAQ](#-faq)
 
 <br/>
 
@@ -38,9 +42,27 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - 📊 **Cost & usage analytics** — deterministic spend at public Anthropic prices (cache-aware), plus tokens, tools, and a weekday×hour heatmap.
 - 📤 **Export & share** — turn any session into clean Markdown, JSON, or a single self-contained HTML page.
 - 🔌 **MCP server** — `claudestudio mcp` lets **Claude Code query your own history**: search sessions, pull a session, ask grounded questions. Zero model calls. *(new in v0.5.0)*
-- ✦ **Smart highlights & knowledge graph** — deterministic heuristics surface breakthroughs, cost spikes, marathons, and recurring prompts; a session×project×file graph shows your work as a connected web. *(new in v0.5.0)*
+- ✦ **Smart highlights & knowledge graph** — deterministic heuristics surface breakthroughs, cost spikes, marathons, and recurring prompts; a session×project×file graph shows your work as a connected web.
+- 🪝 **Auto-index with Claude Code hooks** — `claudestudio hook install` keeps the index fresh after every session, hands-free. *(new in v0.5.1)*
+- 📡 **Live updates** — `claudestudio watch` + an in-app Server-Sent-Events toast surface new sessions the moment they land. *(new in v0.5.1)*
+- 📘 **Message bookmarks** — star a *specific* message, not just a session, and deep-link straight back to it. *(new in v0.5.1)*
+- 🔀 **Inline diffs** — see a real unified diff of every edit in the replay, not raw tool args. *(new in v0.5.1)*
+- 📄 **Activity reports** — a shareable, print-ready HTML/Markdown summary of any week or month (`claudestudio report`). *(new in v0.5.1)*
 
 ---
+
+## 🆕 What's new in v0.5.1
+
+- **Auto-index hooks** — `claudestudio hook install` wires reindexing to Claude Code's `SessionEnd`. See [`docs/HOOK.md`](docs/HOOK.md).
+- **Live watch + SSE** — `claudestudio watch` and the in-app "new sessions available" toast (`/api/events`).
+- **Message bookmarks** — per-message stars, a global Bookmarks view, deep links; new MCP tool `list_bookmarks`.
+- **Inline unified diffs** in the replay view (Diff/Raw toggle).
+- **Activity report** — `claudestudio report`, `/api/report.html|.json`, print-optimized.
+- **Per-tool latency** (`/api/tools/latency`), **multi-root** (`--root a:b`, schema v2), **prompt patterns** (`/api/prompts/patterns`, MCP tool `get_prompt_patterns`).
+- **Export+**: print CSS, CSV (`/api/analytics.csv`, `/api/sessions.csv`), `export --all`.
+- **`--version` + `info`**. Self-test grew 209 → **301** checks; MCP now exposes **10** tools.
+
+<details><summary>What's new in v0.5.0</summary>
 
 ## 🆕 What's new in v0.5.0
 
@@ -50,6 +72,8 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - **Knowledge graph** (`/api/graph`) and **session similarity** (`/api/session/{id}/similar`, TF-IDF).
 - **JSON export** and a short **`cs`** command alias.
 - Architecture reference: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Self-test grew 161 → **209** checks.
+
+</details>
 
 ---
 
@@ -100,6 +124,71 @@ python -m claudestudio demo --serve
 <div align="center">
 <img src="docs/screenshots/sessions.png" alt="Session browser" width="92%" />
 </div>
+
+---
+
+## 🪝 Auto-index with Claude Code Hooks
+
+Stop thinking about Sync. One command makes ClaudeStudio **update itself every
+time Claude Code finishes a session**:
+
+```bash
+claudestudio hook install
+```
+
+It adds a single entry to your `~/.claude/settings.json` that runs the
+(incremental, sub-second) `claudestudio index` on Claude Code's `SessionEnd`
+event:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "claudestudio index" } ] }
+    ]
+  }
+}
+```
+
+The merge is **safe** (never clobbers your existing hooks), **idempotent**
+(install twice = no duplicate), and **reversible** (`claudestudio hook
+uninstall` restores the file). `claudestudio hook status` shows whether it's on
+and when the index last ran; `claudestudio doctor` nudges you if it isn't.
+Full guide: [`docs/HOOK.md`](docs/HOOK.md).
+
+<!-- TODO: screenshot v0.5.1 — terminal showing `claudestudio hook install` and the JSON it wrote (docs/screenshots/v051_hook.png) -->
+
+---
+
+## 📡 Live Updates
+
+The open app keeps itself current. ClaudeStudio holds a **Server-Sent-Events**
+connection (`/api/events`); when the index changes — via the hook, the CLI, or
+the Sync button — a non-blocking toast appears in the corner:
+
+> **New sessions available — click to reload.**
+
+Click it and the current view refreshes **in place** (no full page reload). Want
+a foreground watcher too? Pair the app with:
+
+```bash
+claudestudio watch     # polls your projects root, reindexes on change, Ctrl-C to stop
+```
+
+<!-- TODO: screenshot v0.5.1 — the in-app "new sessions available" toast (docs/screenshots/v051_live.png) -->
+
+---
+
+## 📘 Bookmarks
+
+Favorites mark whole sessions; **bookmarks mark the exact message that mattered**
+— the moment the bug was found, the line that fixed it. Click the 🏷 next to any
+message in the replay, add an optional note, and it shows up in the **Bookmarks**
+view in the sidebar with a deep link that jumps straight back to that session and
+message. Bookmarks live in their own table and survive reindexing, and Claude
+Code can read them through the `list_bookmarks` MCP tool.
+
+<!-- TODO: screenshot v0.5.1 — the global Bookmarks list with deep links (docs/screenshots/v051_bookmarks.png) -->
 
 ---
 
@@ -168,18 +257,20 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 
 ## 🆚 Why ClaudeStudio
 
-|                              | Raw `.jsonl` logs | `cat` / `grep` in terminal | Generic log viewer | **ClaudeStudio** |
-|------------------------------|:-----------------:|:--------------------------:|:------------------:|:----------------:|
-| Browse & sort sessions       | ❌                | ⚠️ manual                  | ⚠️                 | ✅               |
-| Full-text search w/ ranking  | ❌                | ⚠️ line-by-line            | ⚠️                 | ✅ FTS5 + BM25   |
-| Chronological replay         | ❌                | ❌                         | ❌                 | ✅               |
-| Rich tool-call inspection    | ❌                | ❌                         | ❌                 | ✅               |
-| Token & **cost** analytics   | ❌                | ❌                         | ❌                 | ✅ deterministic |
-| Project & timeline views     | ❌                | ❌                         | ❌                 | ✅               |
-| Favorites / archive / tags   | ❌                | ❌                         | ⚠️                 | ✅               |
-| Premium, screenshot-worthy UI| ❌                | ❌                         | ❌                 | ✅               |
-| 100% local, no telemetry     | ✅                | ✅                         | ⚠️                 | ✅               |
-| Zero dependencies            | —                 | ✅                         | ❌                 | ✅ stdlib only   |
+|                               | Raw `.jsonl` logs | `cat` / `grep` | Generic log viewer | Claudia (Tauri GUI) | **ClaudeStudio** |
+|-------------------------------|:-----------------:|:--------------:|:------------------:|:-------------------:|:----------------:|
+| Browse & sort sessions        | ❌                | ⚠️ manual      | ⚠️                 | ✅                  | ✅               |
+| Full-text search w/ ranking   | ❌                | ⚠️ line-by-line| ⚠️                 | ⚠️                  | ✅ FTS5 + BM25   |
+| Chronological replay          | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
+| Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
+| Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ✅ deterministic |
+| Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 10 tools      |
+| Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| Message bookmarks + deep links| ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| 100% local, no telemetry      | ✅                | ✅             | ⚠️                 | ✅                  | ✅               |
+| **No install / no toolchain** | —                 | ✅             | ❌                 | ❌ (Rust/Tauri)     | ✅ `pipx run`    |
+| Zero dependencies             | —                 | ✅             | ❌                 | ❌                  | ✅ stdlib only   |
 
 ---
 
@@ -291,12 +382,44 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] Wrapped → shareable PNG card — _v0.2_
 - [x] Documented public parser API (`from claudestudio import parse_session`) + [FORMAT.md](docs/FORMAT.md) — _v0.2_
 - [x] **Ask** — grounded, local Q&A over your history (handoff briefs, "what to reopen", file history) — _v0.3_
+- [x] **MCP server** — make ClaudeStudio queryable by Claude Code itself — _v0.5.0_
+- [x] **Knowledge graph** (projects ↔ sessions ↔ files) & **smart highlights** — _v0.5.0_
+- [x] **Diff view inside replay** (unified diff of every edit) — _v0.5.1_
+- [x] **Auto-index hooks** + **live watch** (SSE) — _v0.5.1_
+- [x] **Message bookmarks** with deep links — _v0.5.1_
+- [x] **Activity reports** (shareable HTML/Markdown) — _v0.5.1_
+- [x] **Multi-root** index across machines — _v0.5.1_
 - [ ] Native window + installers via an optional Tauri shell
-- [ ] Knowledge graph (projects ↔ sessions ↔ files ↔ concepts)
-- [ ] Smart highlights — auto-surface breakthroughs, fixes, and recurring patterns
-- [ ] Diff view inside replay (file-level evolution across a session)
+- [ ] Plugin / hook system for custom analytics
+- [ ] Team mode (shared, read-only index over the LAN)
+- [ ] VS Code extension (open a session straight from the editor)
+- [ ] Homebrew formula
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).
+
+---
+
+## 🌍 Community
+
+- 💬 [GitHub Discussions](https://github.com/ingridtoulotte/claudestudio/discussions) — questions, ideas, show & tell
+- 🐛 [Issue tracker](https://github.com/ingridtoulotte/claudestudio/issues)
+- 📋 [Changelog](CHANGELOG.md)
+- 🗺 [Roadmap](#-roadmap)
+
+---
+
+## 📚 Citing ClaudeStudio
+
+If you use ClaudeStudio in your work, you can cite it via [`CITATION.cff`](CITATION.cff) or:
+
+```bibtex
+@software{claudestudio,
+  author  = {Toulotte, Ingrid},
+  title   = {ClaudeStudio},
+  url     = {https://github.com/ingridtoulotte/claudestudio},
+  version = {0.5.1}
+}
+```
 
 ---
 

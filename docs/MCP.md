@@ -69,6 +69,31 @@ JSON document.
 | `find_sessions_by_file` | `file_path: str`, `limit?: int = 20` | Sessions whose tool calls referenced a file (by basename). |
 | `get_recent_sessions` | `limit?: int = 5` | The most recently active sessions. |
 | `ask_history` | `question: str`, `session_id?: str` | A grounded, cited answer computed locally (no model calls). |
+| `list_bookmarks` | `session_id?: str` | Per-message bookmarks (starred moments). Optionally scope to one session. |
+| `get_prompt_patterns` | `min_count?: int = 3` | Recurring prompt clusters — the prompt shapes you repeat — with counts. |
+
+### Example invocations
+
+`list_bookmarks` — every starred message, newest first:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":3,"method":"tools/call",
+ "params":{"name":"list_bookmarks","arguments":{}}}
+// ← text content holding {"bookmarks":[{"id":"…","session_id":"…",
+//    "session_title":"…","seq":12,"note":"the actual fix","created_epoch":…}]}
+```
+
+`get_prompt_patterns` — the prompts you ask again and again:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":4,"method":"tools/call",
+ "params":{"name":"get_prompt_patterns","arguments":{"min_count":3}}}
+// ← text content holding {"patterns":[{"pattern_id":"p1",
+//    "canonical_text":"write unit tests for …","count":12,
+//    "sessions":["…"],"last_seen_epoch":…,"similarity_score":0.87}]}
+```
 
 ## Protocol
 
@@ -82,7 +107,7 @@ Standard MCP / JSON-RPC 2.0. The server implements `initialize`, `tools/list`,
 {"jsonrpc":"2.0","id":1,"result":{
   "protocolVersion":"2024-11-05",
   "capabilities":{"tools":{"listChanged":false}},
-  "serverInfo":{"name":"claudestudio","version":"0.5.0"}}}
+  "serverInfo":{"name":"claudestudio","version":"0.5.1"}}}
 
 // → call a tool
 {"jsonrpc":"2.0","id":2,"method":"tools/call",

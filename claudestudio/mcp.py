@@ -151,6 +151,17 @@ def _t_ask_history(conn, args: dict) -> dict:
     return api.ask(conn, question, session)
 
 
+def _t_list_bookmarks(conn, args: dict) -> dict:
+    session = args.get("session_id") or args.get("session") or None
+    return api.list_bookmarks(conn, str(session) if session else None)
+
+
+def _t_get_prompt_patterns(conn, args: dict) -> dict:
+    min_count = api._int_param(args.get("min_count"), 3, lo=2, hi=1000)
+    from . import patterns
+    return {"patterns": patterns.extract_patterns(conn, min_count=min_count)}
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -238,6 +249,28 @@ TOOLS = [
             "required": ["question"],
         },
         "handler": _t_ask_history,
+    },
+    {
+        "name": "list_bookmarks",
+        "description": "List the user's per-message bookmarks (starred moments inside sessions). Optionally scope to one session.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "optional: only this session's bookmarks"},
+            },
+        },
+        "handler": _t_list_bookmarks,
+    },
+    {
+        "name": "get_prompt_patterns",
+        "description": "Recurring prompt patterns — clusters of near-identical prompts the user asks again and again, with counts. Useful for surfacing a reusable prompt.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "min_count": {"type": "integer", "description": "minimum cluster size (default 3)"},
+            },
+        },
+        "handler": _t_get_prompt_patterns,
     },
 ]
 

@@ -164,6 +164,22 @@ font-family:var(--mono);font-size:12px;color:var(--text-2)}
 .tool pre.result{border-top:1px solid var(--line);color:var(--text-3)}
 .foot{margin-top:34px;color:var(--text-3);font-size:12px;text-align:center}
 .foot a{color:var(--violet);text-decoration:none}
+.print-btn{position:fixed;top:14px;right:14px;background:var(--accent);color:#1a1206;
+border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;z-index:10}
+/* Print / Save-as-PDF: white page, full black text, keep each turn whole. */
+@media print{
+  body{background:#fff;color:#000}
+  .print-btn{display:none}
+  .wrap{max-width:none;padding:0 8px}
+  .turn,.stats,.tool{break-inside:avoid;page-break-inside:avoid}
+  .turn{margin:10px 0;border-color:#ccc;background:#fff}
+  .turn.user,.turn.assistant{border-left-width:3px}
+  .text,.think,.tool pre{color:#000}
+  .think{border-color:#999}
+  .meta,.stats .k{color:#333}
+  .stats .v.accent{color:#c2410c}
+  .foot a{color:#000}
+}
 """.strip()
 
 
@@ -233,6 +249,7 @@ def to_html(session: dict) -> str:
 <style>{_HTML_CSS}</style>
 </head>
 <body>
+<button class="print-btn" onclick="window.print()">🖨 Print / Save as PDF</button>
 <div class="wrap">
 <h1>{title}</h1>
 <div class="meta">{" · ".join(meta_bits)}</div>

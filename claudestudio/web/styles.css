@@ -557,3 +557,93 @@ mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 
   .sidebar { display: none; }
   .view-pad { padding: 20px; }
 }
+
+/* ===================================================================
+   v0.5.1 — diff view, bookmarks, latency, patterns, report, live toast
+   =================================================================== */
+
+/* inline unified diff (replay view), built with CSS variables for colors */
+.diff-view {
+  margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; overflow-x: auto;
+  background: #0c0d11; border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  counter-reset: diffline;
+}
+.diff-view .dl { display: block; white-space: pre; padding-left: 6px; border-left: 3px solid transparent; }
+.diff-view .dl.add { background: rgba(94, 201, 138, 0.12); border-left-color: #5ec98a; color: #b8f0cf; }
+.diff-view .dl.del { background: rgba(255, 107, 107, 0.12); border-left-color: #ff6b6b; color: #ffc6c6; }
+.diff-view .dl.hunk { color: var(--text-3); }
+.diff-view .dl.meta { color: var(--text-3); opacity: 0.8; }
+.diff-toggle {
+  margin-left: auto; background: transparent; color: var(--text-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px;
+  font-size: 11px; cursor: pointer;
+}
+.diff-toggle:hover { color: var(--text); border-color: var(--text-3); }
+
+/* per-message bookmark button + note popover */
+.bm-btn {
+  margin-left: 6px; background: transparent; border: 0; cursor: pointer;
+  font-size: 13px; opacity: 0.45; line-height: 1; padding: 2px;
+}
+.bm-btn:hover, .bm-btn.on { opacity: 1; }
+.bm-pop {
+  position: fixed; z-index: 50; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  width: 260px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.bm-pop input { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); padding: 7px 9px; font-size: 13px; }
+.bm-pop-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* bookmarks list view */
+.bm-list { display: flex; flex-direction: column; gap: 8px; }
+.bm-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.bm-row:hover { border-color: var(--text-3); }
+.bm-main { flex: 1; min-width: 0; }
+.bm-title { font-weight: 600; }
+.bm-note { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+.bm-meta { color: var(--text-3); font-size: 12px; margin-top: 4px; }
+.bm-row .x { background: transparent; border: 0; color: var(--text-3); font-size: 18px; cursor: pointer; }
+.bm-row .x:hover { color: var(--accent); }
+
+/* per-tool latency bars */
+.latency { display: flex; flex-direction: column; gap: 8px; }
+.lat-row { display: grid; grid-template-columns: 120px 1fr 56px; align-items: center; gap: 10px; }
+.lat-name { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lat-track { position: relative; height: 14px; background: var(--bg); border-radius: 7px; overflow: hidden; }
+.lat-fill { height: 100%; border-radius: 7px; }
+.lat-fill.good { background: #5ec98a; }
+.lat-fill.warn { background: #ffb454; }
+.lat-fill.bad { background: #ff6b6b; }
+.lat-tick { position: absolute; top: -2px; width: 2px; height: 18px; background: var(--text); opacity: 0.6; }
+.lat-val { font-size: 12px; color: var(--text-2); text-align: right; font-family: var(--mono); }
+
+/* recurring prompt patterns */
+.patterns { display: flex; flex-direction: column; gap: 8px; }
+.pattern-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.pat-main { flex: 1; min-width: 0; }
+.pat-text { font-size: 14px; }
+.pat-meta { color: var(--text-3); font-size: 12px; margin-top: 3px; }
+
+/* report / CSV export toolbar */
+.report-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.report-bar label { color: var(--text-3); font-size: 13px; }
+.report-bar input[type="date"] { background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--text); padding: 6px 8px; font-size: 13px; }
+
+/* live-update toast (clickable) */
+.toast.live { cursor: pointer; border-color: var(--accent); }
+.toast.live:hover { background: #1b1e26; }
+
+/* ---- accessibility: respect reduced-motion preference ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

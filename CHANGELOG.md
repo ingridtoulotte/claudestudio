@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-25
+
+The "make it part of your daily loop" release. ClaudeStudio now keeps itself
+current (Claude Code hooks + live watch), lets you mark and revisit individual
+messages, renders real diffs of every edit, and ships a one-click activity
+report — all still local-first, zero-dependency, and covered by an expanded
+self-test (209 → 301 checks).
+
+### Added
+- **Live watch mode + SSE push (`claudestudio watch`, `GET /api/events`).** The
+  open app no longer goes stale: a Server-Sent-Events stream notifies the SPA the
+  moment the index changes, showing a one-click "new sessions available" toast
+  that refreshes in place — no full reload. `claudestudio watch` is a foreground
+  poller that reindexes whenever a `.jsonl` changes. Polling, not inotify, so it
+  behaves identically on every OS.
+- **Message bookmarks (`POST /api/session/{id}/bookmark`, `GET /api/bookmarks`,
+  `DELETE /api/bookmark/{id}`).** Star a *specific* message, not just a whole
+  session. Bookmarks live in their own table (never wiped by reindexing), get a
+  global Bookmarks view in the sidebar, and deep-link straight back to the exact
+  session + message. Also exposed to Claude Code as the new MCP tool
+  `list_bookmarks`.
+- **Inline unified diffs in the replay view.** Every `Edit`/`Write`/`MultiEdit`
+  tool call now carries a `diff` field (stdlib `difflib`, capped at 200 lines)
+  rendered as a syntax-highlighted, XSS-safe diff with a Diff/Raw toggle.
+- **Activity report (`claudestudio report`, `GET /api/report.html|.json`).** A
+  shareable, self-contained HTML (or Markdown) summary of any week or month:
+  hero stats, top projects & tools, an ASCII activity chart, and notable sessions
+  — print-optimized with a Save-as-PDF button. Defaults to the current week.
+- **Claude Code hook integration (`claudestudio hook install|status|uninstall`).**
+  One command wires `claudestudio index` to Claude Code's `SessionEnd` event in
+  `~/.claude/settings.json`, so the index refreshes itself after every session.
+  Merges cleanly (never clobbers existing hooks), idempotent, fully reversible.
+  Guide in [`docs/HOOK.md`](docs/HOOK.md); `doctor` now reports hook status.
+- **Per-tool latency analytics (`GET /api/tools/latency`).** p50/p95/p99/max/mean
+  latency per tool, derived from message timestamps, shown as color-banded bars in
+  the Tools dashboard.
+- **Multi-root support.** One index can span several projects roots (work laptop,
+  personal machine, remote). `--root` accepts several paths separated by the
+  platform path separator; `list`/`search` gain a `?root=` filter; `doctor`/`info`
+  report per-root counts. Schema migrated to v2 in place (no data loss).
+- **Prompt pattern extraction (`GET /api/prompts/patterns`).** Clusters your
+  near-identical prompts (trigram Jaccard) into a personal prompt library — the
+  things you ask Claude again and again — with copy buttons. New MCP tool
+  `get_prompt_patterns`.
+- **Export enhancements.** Print-optimized CSS (`@media print`) + a Save-as-PDF
+  button in HTML exports; CSV exports (`GET /api/analytics.csv`,
+  `GET /api/sessions.csv`); and `claudestudio export --all` batch mode with
+  progress and skip-existing.
+- **`claudestudio info` + `--version`.** `--version`/`-V` prints `claudestudio
+  0.5.1`; `info` prints a full environment summary (version, Python, platform,
+  index path/size, session count, FTS5 + hook status, roots, MCP snippet) for bug
+  reports.
+- **Keyboard navigation & accessibility pass.** Landmark roles
+  (`navigation`/`main`/`complementary`), `aria-label`s on icon buttons, a
+  `prefers-reduced-motion` media query, Space = play/pause and `←`/`→` = step in
+  the replay (guarded against firing while typing), and `B` to bookmark.
+- **Community infrastructure.** `CITATION.cff`, a tag-triggered release workflow
+  (`.github/workflows/release.yml`) that builds the wheel and gates on the
+  self-test, and a Discussions contact link.
+
+### Changed
+- Self-test grows from **209 to 301** exact-assertion checks; every new module
+  (`hook`, `report`, `patterns`) and endpoint has fixture-based coverage.
+- MCP server now exposes **10** tools (was 8).
+- `pyproject.toml`: new keywords (`bookmarks`, `hooks`, `live-watch`,
+  `diff-view`, `report`) and `Documentation` / `Changelog` project URLs.
+- The `export` command's `session_id` is now optional (omit it with `--all`).
+
+### Fixed
+- The index schema is versioned and migrated forward to v2 automatically;
+  opening a newer-schema index still fails loudly rather than returning wrong data.
+
 ## [0.5.0] - 2026-06-24
 
 ClaudeStudio becomes a first-class part of your Claude Code toolchain: it can now

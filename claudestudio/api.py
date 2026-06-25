@@ -7,6 +7,9 @@ module is what the tests exercise directly.
 
 from __future__ import annotations
 
+import csv
+import difflib
+import io
 import json
 import re
 import sqlite3
@@ -88,6 +91,11 @@ def list_sessions(conn, params: dict) -> dict:
     if model:
         where.append("s.models LIKE ?")
         args.append(f"%{model}%")
+    root = params.get("root")
+    if root:
+        # restrict to sessions indexed under one projects root (multi-root)
+        where.append("s.session_id IN (SELECT session_id FROM sources WHERE root=?)")
+        args.append(root)
     # date-range filter on session activity, mirroring search()'s since/until.
     # Overlap semantics: `since` keeps sessions still active on/after the bound
     # (last_epoch >= since); `until` keeps sessions started on/before it
@@ -159,6 +167,10 @@ def get_session(conn, session_id: str) -> dict | None:
         except json.JSONDecodeError:
             td["input"] = {}
         td["is_error"] = bool(td["is_error"])
+        diff, truncated = tool_diff(td.get("name", ""), td["input"])
+        if diff is not None:
+            td["diff"] = diff
+            td["diff_truncated"] = truncated
         tools_by_msg.setdefault(t["message_uuid"], []).append(td)
 
     timeline = []
@@ -212,6 +224,10 @@ def search(conn, params: dict) -> dict:
     if project:
         where.append("(s.project = ? OR s.project_name = ?)")
         args.extend([project, project])
+    root = (params.get("root") or "").strip()
+    if root:
+        where.append("f.session_id IN (SELECT session_id FROM sources WHERE root=?)")
+        args.append(root)
     if since is not None or until is not None:
         # message epoch lives on `messages`, not the FTS shadow table
         join = "JOIN messages mm ON mm.uuid = f.message_uuid"
@@ -343,6 +359,26 @@ def delete_saved(conn, saved_id) -> dict:
     return {"deleted": True, "id": sid}
 
 
+# ---------------------------------------------------------------------------
+# per-message bookmarks  (deep-linkable, survive reindex)
+# ---------------------------------------------------------------------------
+
+def add_bookmark(conn, session_id: str, body: dict) -> dict:
+    """Create a bookmark on a message. Body: ``{seq:int, note:str}``."""
+    seq = body.get("seq", 0)
+    note = body.get("note", "")
+    return index.add_bookmark(conn, session_id, seq, note)
+
+
+def delete_bookmark(conn, bookmark_id) -> dict:
+    return index.delete_bookmark(conn, bookmark_id)
+
+
+def list_bookmarks(conn, session: str | None = None) -> dict:
+    """All bookmarks, or one session's when ``session`` is given."""
+    return {"bookmarks": index.list_bookmarks(conn, session or None)}
+
+
 def _slug(text: str | None, fallback: str = "session") -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", (text or "").strip().lower()).strip("-")
     return (s[:60] or fallback)
@@ -365,6 +401,87 @@ def export_session(conn, session_id: str, fmt: str) -> dict | None:
         ext = "md"
     filename = f"{_slug(detail.get('title'), session_id[:8] or 'session')}.{ext}"
     return {"text": text, "content_type": content_type, "filename": filename}
+
+
+# ---------------------------------------------------------------------------
+# inline diffs  (computed from edit-tool inputs, shown in the replay view)
+# ---------------------------------------------------------------------------
+
+# How many diff lines we keep before truncating — a guard against a giant file
+# rewrite ballooning the /api/session payload.
+DIFF_MAX_LINES = 200
+# Edit-style tools carry a before/after pair. We accept the current Claude Code
+# names and the older str_replace wire names so a diff renders either way.
+_REPLACE_TOOLS = {"Edit", "MultiEdit", "Update", "str_replace_based_edit",
+                  "str_replace_editor"}
+_CREATE_TOOLS = {"Write", "create_file", "write_to_file"}
+
+
+def _diff_path(inp: dict) -> str:
+    for k in ("file_path", "path", "notebook_path", "filename", "file"):
+        v = inp.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().replace("\\", "/").rsplit("/", 1)[-1] or v.strip()
+    return "file"
+
+
+def _unified(old: str, new: str, label: str) -> tuple[str | None, bool]:
+    if old == new:
+        return None, False
+    lines = list(difflib.unified_diff(
+        (old or "").splitlines(), (new or "").splitlines(),
+        fromfile=f"a/{label}", tofile=f"b/{label}", lineterm="",
+    ))
+    if not lines:
+        return None, False
+    truncated = len(lines) > DIFF_MAX_LINES
+    if truncated:
+        lines = lines[:DIFF_MAX_LINES]
+    return "\n".join(lines), truncated
+
+
+def tool_diff(name: str, inp: dict | None) -> tuple[str | None, bool]:
+    """Unified-diff string for one edit/create tool call, or (None, False).
+
+    * Replace-style edits (``Edit`` / ``MultiEdit`` / ``str_replace_*``) diff
+      ``old_string`` → ``new_string``. ``MultiEdit`` concatenates each edit.
+    * Create/write tools diff empty → file content.
+
+    Pure ``difflib`` (stdlib), capped at :data:`DIFF_MAX_LINES`; the second tuple
+    element flags truncation so the UI can say "diff truncated".
+    """
+    inp = inp or {}
+    label = _diff_path(inp)
+    if name in _REPLACE_TOOLS:
+        edits = inp.get("edits")
+        if isinstance(edits, list) and edits:  # MultiEdit: one diff per edit, joined
+            chunks, trunc = [], False
+            for e in edits:
+                if not isinstance(e, dict):
+                    continue
+                d, t = _unified(str(e.get("old_string", e.get("old_str", "")) or ""),
+                                str(e.get("new_string", e.get("new_str", "")) or ""), label)
+                if d:
+                    chunks.append(d)
+                trunc = trunc or t
+            if not chunks:
+                return None, False
+            joined = "\n".join(chunks)
+            lines = joined.splitlines()
+            if len(lines) > DIFF_MAX_LINES:
+                return "\n".join(lines[:DIFF_MAX_LINES]), True
+            return joined, trunc
+        old = inp.get("old_string", inp.get("old_str"))
+        new = inp.get("new_string", inp.get("new_str"))
+        if old is None and new is None:
+            return None, False
+        return _unified(str(old or ""), str(new or ""), label)
+    if name in _CREATE_TOOLS:
+        content = inp.get("content", inp.get("file_text", inp.get("new_string")))
+        if content is None:
+            return None, False
+        return _unified("", str(content or ""), label)
+    return None, False
 
 
 def _fts_query(q: str) -> str:
@@ -748,10 +865,113 @@ def analytics_payload(conn): return analytics.overview(conn)
 def projects_payload(conn): return {"projects": analytics.projects(conn)}
 def wrapped_payload(conn, year=None): return wrapped.generate(conn, _int_param(year, None))
 def tools_payload(conn): return tools_stats(conn)
+def tool_latency_payload(conn): return {"latency": analytics.tool_latency(conn)}
 def graph_payload(conn, params=None): return graph(conn, params or {})
 def highlights_payload(conn):
     from . import highlights
     return highlights.generate(conn)
+
+
+# ---------------------------------------------------------------------------
+# CSV exports  (analytics + session list, spreadsheet-ready)
+# ---------------------------------------------------------------------------
+
+_SESSION_CSV_COLS = [
+    "session_id", "title", "project_name", "first_ts", "last_ts", "msg_count",
+    "user_msgs", "tool_calls", "input_tokens", "output_tokens", "cache_write",
+    "cache_read", "cost_usd", "primary_model",
+]
+
+
+def sessions_csv(conn) -> str:
+    """The full session list as CSV — one header row plus one row per session."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_SESSION_CSV_COLS)
+    for r in conn.execute(
+        f"SELECT {','.join(_SESSION_CSV_COLS)} FROM sessions "
+        "ORDER BY last_epoch DESC, session_id ASC"
+    ):
+        w.writerow([r[c] for c in _SESSION_CSV_COLS])
+    return buf.getvalue()
+
+
+def analytics_csv(conn) -> str:
+    """Analytics overview flattened into a multi-section CSV.
+
+    Sections (``# Overview``, ``# By model``, ``# By tool``, ``# Daily activity``,
+    ``# Top projects``) are separated by a blank line, each with its own header
+    row — readable as one sheet or split per section.
+    """
+    ov = analytics.overview(conn)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# Overview"])
+    w.writerow(["metric", "value"])
+    for k in ("sessions", "messages", "tool_calls", "tokens", "cost_usd", "projects"):
+        w.writerow([k, ov.get(k)])
+    w.writerow([])
+    w.writerow(["# By model"])
+    w.writerow(["model", "family", "messages", "tokens", "cost_usd"])
+    for m in ov.get("by_model", []):
+        w.writerow([m["model"], m["family"], m["messages"], m["tokens"], round(m["cost_usd"], 6)])
+    w.writerow([])
+    w.writerow(["# By tool"])
+    w.writerow(["tool", "calls", "errors"])
+    for t in ov.get("by_tool", []):
+        w.writerow([t["name"], t["calls"], t["errors"]])
+    w.writerow([])
+    w.writerow(["# Daily activity"])
+    w.writerow(["date", "sessions", "messages", "cost_usd", "tool_calls"])
+    for d in ov.get("daily", []):
+        w.writerow([d["date"], d["sessions"], d["messages"], round(d["cost_usd"], 6), d["tool_calls"]])
+    w.writerow([])
+    w.writerow(["# Top projects"])
+    w.writerow(["project", "sessions", "messages", "cost_usd"])
+    for p in ov.get("top_projects", []):
+        w.writerow([p["project_name"], p["sessions"], p["messages"], round(p["cost_usd"], 6)])
+    return buf.getvalue()
+
+
+def report_range(params: dict) -> tuple[float, float, str]:
+    """Resolve (since_epoch, until_epoch, title) from params, default = this week."""
+    import datetime as _dt
+
+    from . import report
+    since = _as_epoch(params.get("since"))
+    until = _as_epoch(params.get("until"), end_of_day=True)
+    if since is None or until is None:
+        ws, wu = report.week_bounds(_dt.datetime.now())
+        since = ws if since is None else since
+        until = wu if until is None else until
+    title = (params.get("title") or "Claude Code Activity").strip() or "Claude Code Activity"
+    return since, until, title
+
+
+def report_html(conn, params: dict) -> dict:
+    """Rendered report as a self-contained HTML (or Markdown) string + headers."""
+    from . import report
+    since, until, title = report_range(params)
+    fmt = (params.get("format") or "html").lower()
+    text = report.generate_report(conn, since, until, title, fmt)
+    if fmt in ("md", "markdown"):
+        return {"text": text, "content_type": "text/markdown; charset=utf-8"}
+    return {"text": text, "content_type": "text/html; charset=utf-8"}
+
+
+def report_json(conn, params: dict) -> dict:
+    """Machine-readable report data for the same range."""
+    from . import report
+    since, until, title = report_range(params)
+    return report.report_data(conn, since, until, title)
+
+
+def prompt_patterns(conn, params: dict | None = None) -> dict:
+    """Recurring prompt clusters for the Patterns view / MCP. Pure read."""
+    from . import patterns
+    params = params or {}
+    min_count = _int_param(params.get("min_count"), 3, lo=2, hi=1000)
+    return {"patterns": patterns.extract_patterns(conn, min_count=min_count)}
 
 
 def ask(conn, question, session=None) -> dict:

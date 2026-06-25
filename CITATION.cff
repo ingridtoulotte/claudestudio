@@ -1,0 +1,17 @@
+cff-version: "1.2.0"
+message: "If you use ClaudeStudio in your research or tooling, please cite it."
+title: "ClaudeStudio"
+abstract: "Local-first session browser, analytics, and MCP server for Claude Code. Zero dependencies, pure Python standard library."
+authors:
+  - family-names: "Toulotte"
+    given-names: "Ingrid"
+repository-code: "https://github.com/ingridtoulotte/claudestudio"
+url: "https://github.com/ingridtoulotte/claudestudio"
+license: MIT
+version: "0.5.1"
+keywords:
+  - claude-code
+  - mcp
+  - local-first
+  - developer-tools
+  - session-analytics

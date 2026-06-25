@@ -10,11 +10,22 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import api, index
+
+
+def sse_pack(obj) -> str:
+    """Serialize a payload as one Server-Sent-Events `data:` frame.
+
+    SSE frames are ``data: <text>`` lines terminated by a blank line. We send one
+    compact JSON object per event, so the browser's ``EventSource`` ``onmessage``
+    receives parseable JSON. Pure function — exercised directly in the self-test.
+    """
+    return "data: " + json.dumps(obj, default=str) + "\n\n"
 
 
 def _resolve_web_dir():
@@ -237,6 +248,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        if path == "/api/events":
+            return self._serve_events()
         if path.startswith("/api/"):
             return self._api_get(path, params)
         return self._serve_static(path)
@@ -258,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(stats)
                 if path == "/api/saved":
                     return self._send_json(api.add_saved(conn, body))
+                if path.startswith("/api/session/") and path.endswith("/bookmark"):
+                    sid = path[len("/api/session/"):-len("/bookmark")]
+                    return self._send_json(api.add_bookmark(conn, sid, body))
                 if path.startswith("/api/state/"):
                     sid = path[len("/api/state/"):]
                     return self._send_json(api.set_state(conn, sid, body))
@@ -279,6 +295,9 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/saved/"):
                     sid = path[len("/api/saved/"):]
                     return self._send_json(api.delete_saved(conn, sid))
+                if path.startswith("/api/bookmark/"):
+                    bid = path[len("/api/bookmark/"):]
+                    return self._send_json(api.delete_bookmark(conn, bid))
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001
@@ -297,14 +316,31 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.search(conn, params))
                 if path == "/api/analytics":
                     return self._send_json(api.analytics_payload(conn))
+                if path == "/api/analytics.csv":
+                    return self._send_bytes(api.analytics_csv(conn).encode("utf-8"),
+                                            "text/csv; charset=utf-8")
+                if path == "/api/sessions.csv":
+                    return self._send_bytes(api.sessions_csv(conn).encode("utf-8"),
+                                            "text/csv; charset=utf-8")
                 if path == "/api/projects":
                     return self._send_json(api.projects_payload(conn))
                 if path == "/api/tools/stats":
                     return self._send_json(api.tools_payload(conn))
+                if path == "/api/tools/latency":
+                    return self._send_json(api.tool_latency_payload(conn))
                 if path == "/api/graph":
                     return self._send_json(api.graph_payload(conn, params))
                 if path == "/api/highlights":
                     return self._send_json(api.highlights_payload(conn))
+                if path == "/api/prompts/patterns":
+                    return self._send_json(api.prompt_patterns(conn, params))
+                if path == "/api/report.json":
+                    return self._send_json(api.report_json(conn, params))
+                if path in ("/api/report", "/api/report.html", "/api/report.md"):
+                    if path.endswith(".md"):
+                        params = {**params, "format": "md"}
+                    out = api.report_html(conn, params)
+                    return self._send_bytes(out["text"].encode("utf-8"), out["content_type"])
                 if path == "/api/wrapped":
                     # year is coerced inside wrapped_payload so a bad ?year=abc
                     # returns the all-time view instead of crashing the handler.
@@ -315,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.ask(conn, params.get("q", ""), params.get("session") or None))
                 if path == "/api/saved":
                     return self._send_json({"saved": api.list_saved(conn)})
+                if path == "/api/bookmarks":
+                    return self._send_json(api.list_bookmarks(conn, params.get("session")))
                 if path.startswith("/api/session/") and path.endswith("/similar"):
                     sid = path[len("/api/session/"):-len("/similar")]
                     return self._send_json(api.similar_sessions(conn, sid, params.get("limit", 5)))
@@ -338,6 +376,46 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
 
+    def _serve_events(self):
+        """Server-Sent Events stream: tell the SPA when the index changes.
+
+        Holds the connection open, polling the index file's mtime every ~3s; on a
+        change it pushes ``data: {"type":"reindex","ts":<epoch>}`` so the open app
+        can offer a one-click refresh. Same loopback/Host guard as every endpoint
+        (already applied in ``do_GET``). Ends cleanly on client disconnect or on
+        server shutdown via the server's ``stop_event``.
+        """
+        self.close_connection = True  # a stream is not a reusable keep-alive conn
+        try:
+            self.send_response(200)
+            self._emit_security_headers()
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            return
+        stop = getattr(self.server, "stop_event", None)
+        last = index.index_db_mtime(self.db_path)
+        while True:
+            if stop is not None:
+                if stop.wait(3.0):
+                    break
+            else:
+                time.sleep(3.0)
+            try:
+                cur = index.index_db_mtime(self.db_path)
+                if cur != last:
+                    last = cur
+                    self.wfile.write(sse_pack({"type": "reindex", "ts": cur}).encode("utf-8"))
+                else:
+                    self.wfile.write(b": keepalive\n\n")  # comment frame keeps it warm
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionError, OSError):
+                break
+
     def _serve_static(self, path):
         if path in ("/", ""):
             path = "/index.html"
@@ -360,6 +438,9 @@ def make_server(db_path, projects_root=None, host="127.0.0.1", port=8787):
     Handler.projects_root = projects_root
     Handler.bind_host = host
     httpd = ThreadingHTTPServer((host, port), Handler)
+    # Lets open SSE streams (/api/events) wake up and exit promptly on shutdown
+    # instead of blocking until the next 3s poll or a client disconnect.
+    httpd.stop_event = threading.Event()
     return httpd
 
 
@@ -385,6 +466,8 @@ def serve(db_path, projects_root=None, host="127.0.0.1", port=8787, open_browser
     except KeyboardInterrupt:
         print("\n  Stopped.")
     finally:
+        # wake any open SSE streams so their threads exit before we close
+        getattr(httpd, "stop_event", threading.Event()).set()
         httpd.server_close()
 
 

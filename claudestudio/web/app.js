@@ -100,6 +100,15 @@ const API = {
   saved: () => API.get('/api/saved'),
   addSaved: (b) => API.post('/api/saved', b),
   delSaved: (id) => fetch('/api/saved/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
+  // v0.5.1
+  toolLatency: () => API.get('/api/tools/latency'),
+  patterns: (minCount) => API.get('/api/prompts/patterns' + (minCount ? '?min_count=' + minCount : '')),
+  bookmarks: (session) => API.get('/api/bookmarks' + (session ? '?session=' + encodeURIComponent(session) : '')),
+  addBookmark: (id, body) => API.post('/api/session/' + encodeURIComponent(id) + '/bookmark', body),
+  delBookmark: (id) => fetch('/api/bookmark/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
+  reportUrl: (since, until, fmt = 'html') => '/api/report.' + fmt + '?' + new URLSearchParams({ since, until }),
+  analyticsCsvUrl: () => '/api/analytics.csv',
+  sessionsCsvUrl: () => '/api/sessions.csv',
 };
 
 // trigger a browser download from a server endpoint that sets Content-Disposition
@@ -173,6 +182,7 @@ function toast(msg, kind = 'ok') {
 const NAV = [
   { id: 'sessions', label: 'Sessions', icon: 'M4 6h16M4 12h16M4 18h10' },
   { id: 'ask', label: 'Ask', icon: 'M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 21l2.1-5.4A8.5 8.5 0 1 1 21 11.5z' },
+  { id: 'bookmarks', label: 'Bookmarks', icon: 'M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z' },
   { id: 'timeline', label: 'Timeline', icon: 'M3 12h4l3-8 4 16 3-8h4' },
   { id: 'analytics', label: 'Analytics', icon: 'M4 19V5M4 19h16M8 16v-5M13 16V8M18 16v-9' },
   { id: 'projects', label: 'Projects', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
@@ -206,6 +216,10 @@ function renderFootStats(s) {
 
 // ---- router ---------------------------------------------------------------
 let STATE = { summary: null };
+// session currently open in the replay view + its bookmarks (keyed by seq), so
+// per-message bookmark buttons know which session they belong to.
+let CURRENT_SESSION = null;
+let SESSION_BOOKMARKS = {};
 const view = () => $('#view');
 
 // a per-view keyboard handler, torn down whenever the route changes so handlers
@@ -230,9 +244,11 @@ async function router() {
   const route = parts[0] || 'sessions';
   highlightNav(['session'].includes(route) ? 'sessions' : route);
   setViewKey(null);  // drop any previous view's keyboard handler
+  if (typeof closeBookmarkPopover === 'function') closeBookmarkPopover();
   try {
     if (route === 'session') return await viewSession(parts[1], params);
     if (route === 'ask') return await viewAsk(params);
+    if (route === 'bookmarks') return await viewBookmarks(params);
     if (route === 'analytics') return await viewAnalytics();
     if (route === 'projects') return await viewProjects();
     if (route === 'timeline') return await viewTimeline();
@@ -434,11 +450,15 @@ function briefFromTimeline(timeline) {
 async function viewSession(id, params = {}) {
   view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const s = await API.session(id);
+  // bookmark context for this session's per-message buttons
+  CURRENT_SESSION = id;
+  SESSION_BOOKMARKS = {};
+  try { (await API.bookmarks(id)).bookmarks.forEach((b) => { SESSION_BOOKMARKS[b.seq] = b; }); } catch (e) { /* ignore */ }
   const root = el('div', { class: 'view-pad fade-in' });
 
   // header
-  const star = el('button', { class: 'iconbtn' + (s.favorite ? ' on' : ''), title: 'Favorite', html: s.favorite ? '★' : '☆', onclick: async () => { const r = await API.state(id, { favorite: !s.favorite }); s.favorite = r.favorite; star.classList.toggle('on', r.favorite); star.innerHTML = r.favorite ? '★' : '☆'; toast(r.favorite ? 'Favorited' : 'Unfavorited'); } });
-  const arch = el('button', { class: 'iconbtn' + (s.archived ? ' on' : ''), title: 'Archive', html: '🗄', onclick: async () => { const r = await API.state(id, { archived: !s.archived }); s.archived = r.archived; arch.classList.toggle('on', r.archived); toast(r.archived ? 'Archived' : 'Unarchived'); } });
+  const star = el('button', { class: 'iconbtn' + (s.favorite ? ' on' : ''), title: 'Favorite', 'aria-label': 'Toggle favorite', html: s.favorite ? '★' : '☆', onclick: async () => { const r = await API.state(id, { favorite: !s.favorite }); s.favorite = r.favorite; star.classList.toggle('on', r.favorite); star.innerHTML = r.favorite ? '★' : '☆'; toast(r.favorite ? 'Favorited' : 'Unfavorited'); } });
+  const arch = el('button', { class: 'iconbtn' + (s.archived ? ' on' : ''), title: 'Archive', 'aria-label': 'Toggle archive', html: '🗄', onclick: async () => { const r = await API.state(id, { archived: !s.archived }); s.archived = r.archived; arch.classList.toggle('on', r.archived); toast(r.archived ? 'Archived' : 'Unarchived'); } });
 
   const askBtn = el('button', { class: 'btn-ghost accent', title: 'Ask the grounded companion about this session', onclick: () => go('ask', { session: id }) }, ['✦ Ask about this']);
   const expMd = el('button', { class: 'btn-ghost', title: 'Export to Markdown', onclick: () => { downloadFrom(API.exportUrl(id, 'md')); toast('Exported Markdown'); } }, ['⬇ .md']);
@@ -532,6 +552,11 @@ async function viewSession(id, params = {}) {
     else if (k === 'k' || k === 'PageUp') { e.preventDefault(); moveCursor(cursor < 0 ? 0 : cursor - 1); }
     else if (k === 'Home') { e.preventDefault(); moveCursor(0); }
     else if (k === 'End') { e.preventDefault(); moveCursor(thread.children.length - 1); }
+    // replay transport (these must not fire while typing — guarded above)
+    else if (k === ' ') { e.preventDefault(); replay.toggle(); }
+    else if (k === 'ArrowLeft') { e.preventDefault(); replay.stepBack(); }
+    else if (k === 'ArrowRight') { e.preventDefault(); replay.stepForward(); }
+    else if (k === 'b' || k === 'B') { e.preventDefault(); if (cursor >= 0) openBookmarkPopover(cursor, null); }
   });
 
   // when arriving from a search result, light up the matched terms in the body
@@ -579,6 +604,7 @@ function turnNode(m, i, cont = false) {
   if (m.model) who.appendChild(el('span', { class: 'usage-tag', text: shortModel(m.model) }));
   if (!isUser && (m.input_tokens || m.output_tokens)) who.appendChild(el('span', { class: 'usage-tag', text: `${fmt.compact(m.input_tokens)}→${fmt.compact(m.output_tokens)} tok` }));
   if (m.cost_usd) who.appendChild(el('span', { class: 'usage-tag', text: fmt.cost(m.cost_usd) }));
+  who.appendChild(bookmarkButton(i));
   bubble.appendChild(who);
   if (m.text) bubble.appendChild(el('div', { class: 'msg-text', text: m.text }));
   if (m.thinking) {
@@ -595,17 +621,137 @@ function turnNode(m, i, cont = false) {
 function toolCard(t) {
   const icon = TOOL_ICON[t.name] || '⚙️';
   const argText = Object.entries(t.input || {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');
-  return el('div', { class: 'tool-card' + (t.is_error ? ' error' : '') }, [
-    el('div', { class: 'tool-head' }, [
-      el('span', { class: 'ticon', text: icon }),
-      el('span', { class: 'tname', text: t.name }),
-      t.is_error ? el('span', { class: 'terr', text: '● error' }) : el('span', { class: 'tok', text: '● ok' }),
-    ]),
-    el('div', { class: 'tool-body' }, [
-      argText ? el('div', { class: 'tool-arg', text: argText.slice(0, 1200) }) : null,
-      t.result_preview ? el('div', { class: 'tool-result', text: t.result_preview.slice(0, 600) }) : null,
-    ].filter(Boolean)),
+  const head = el('div', { class: 'tool-head' }, [
+    el('span', { class: 'ticon', text: icon }),
+    el('span', { class: 'tname', text: t.name }),
+    t.is_error ? el('span', { class: 'terr', text: '● error' }) : el('span', { class: 'tok', text: '● ok' }),
   ]);
+  const body = el('div', { class: 'tool-body' });
+  // Inline unified diff (edit/create tools): default to the diff, with a Diff/Raw
+  // toggle back to the original tool-call args. Falls back to args when no diff.
+  if (t.diff) {
+    const diffView = diffNode(t.diff, t.diff_truncated);
+    const rawView = el('div', { class: 'tool-arg', text: argText.slice(0, 1200), style: 'display:none' });
+    const toggle = el('button', { class: 'diff-toggle', 'aria-label': 'Toggle diff and raw view', text: 'Raw' });
+    let showingDiff = true;
+    toggle.addEventListener('click', () => {
+      showingDiff = !showingDiff;
+      diffView.style.display = showingDiff ? '' : 'none';
+      rawView.style.display = showingDiff ? 'none' : '';
+      toggle.textContent = showingDiff ? 'Raw' : 'Diff';
+    });
+    head.appendChild(toggle);
+    body.appendChild(diffView);
+    body.appendChild(rawView);
+  } else {
+    if (argText) body.appendChild(el('div', { class: 'tool-arg', text: argText.slice(0, 1200) }));
+  }
+  if (t.result_preview) body.appendChild(el('div', { class: 'tool-result', text: t.result_preview.slice(0, 600) }));
+  return el('div', { class: 'tool-card' + (t.is_error ? ' error' : '') }, [head, body]);
+}
+
+// Render a unified-diff string as a colored <pre>, escaping every line so a `<`
+// in the code can never inject markup. + lines green, - lines red, @@ muted.
+function diffNode(diff, truncated) {
+  const pre = el('pre', { class: 'diff-view' });
+  String(diff).split('\n').forEach((line) => {
+    let cls = 'dl';
+    if (line.startsWith('+') && !line.startsWith('+++')) cls = 'dl add';
+    else if (line.startsWith('-') && !line.startsWith('---')) cls = 'dl del';
+    else if (line.startsWith('@@')) cls = 'dl hunk';
+    else if (line.startsWith('+++') || line.startsWith('---')) cls = 'dl meta';
+    pre.appendChild(el('span', { class: cls, text: line + '\n' }));
+  });
+  if (truncated) pre.appendChild(el('span', { class: 'dl meta', text: '… diff truncated\n' }));
+  return pre;
+}
+
+// ---- per-message bookmarks ------------------------------------------------
+function bookmarkButton(seq) {
+  const on = !!SESSION_BOOKMARKS[seq];
+  const btn = el('button', {
+    class: 'bm-btn' + (on ? ' on' : ''),
+    'aria-label': on ? 'Edit bookmark on this message' : 'Bookmark this message',
+    title: 'Bookmark (B)', html: on ? '🔖' : '🏷',
+  });
+  btn.addEventListener('click', (e) => { e.stopPropagation(); openBookmarkPopover(seq, btn); });
+  return btn;
+}
+
+let _bmPop = null;
+function closeBookmarkPopover() { if (_bmPop) { _bmPop.remove(); _bmPop = null; } }
+
+function openBookmarkPopover(seq, btn) {
+  closeBookmarkPopover();
+  if (!CURRENT_SESSION) return;
+  const existing = SESSION_BOOKMARKS[seq];
+  const input = el('input', { type: 'text', placeholder: 'note (optional)', value: existing ? existing.note : '' });
+  const save = el('button', { class: 'btn-ghost accent', text: existing ? 'Update' : 'Save' });
+  const remove = existing ? el('button', { class: 'btn-ghost', text: 'Remove' }) : null;
+  const pop = el('div', { class: 'bm-pop', role: 'dialog', 'aria-label': 'Bookmark note' }, [
+    input, el('div', { class: 'bm-pop-actions' }, [save, remove].filter(Boolean)),
+  ]);
+  _bmPop = pop;
+  document.body.appendChild(pop);
+  const refBtn = btn || $(`.turn[data-i="${seq}"] .bm-btn`);
+  if (refBtn) {
+    const r = refBtn.getBoundingClientRect();
+    pop.style.top = (r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, r.left - 120) + 'px';
+  }
+  input.focus();
+  const doSave = async () => {
+    try {
+      if (existing) await API.delBookmark(existing.id);
+      const r = await API.addBookmark(CURRENT_SESSION, { seq, note: input.value });
+      SESSION_BOOKMARKS[seq] = r;
+      const b = btn || $(`.turn[data-i="${seq}"] .bm-btn`);
+      if (b) { b.classList.add('on'); b.innerHTML = '🔖'; }
+      toast('Bookmarked');
+    } catch (e) { toast('Could not save bookmark', 'err'); }
+    closeBookmarkPopover();
+  };
+  save.addEventListener('click', doSave);
+  if (remove) remove.addEventListener('click', async () => {
+    try { await API.delBookmark(existing.id); delete SESSION_BOOKMARKS[seq]; const b = btn || $(`.turn[data-i="${seq}"] .bm-btn`); if (b) { b.classList.remove('on'); b.innerHTML = '🏷'; } toast('Bookmark removed'); } catch (e) { toast('Could not remove', 'err'); }
+    closeBookmarkPopover();
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSave(); else if (e.key === 'Escape') closeBookmarkPopover(); });
+}
+
+// ---- view: bookmarks ------------------------------------------------------
+async function viewBookmarks() {
+  view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { bookmarks } = await API.bookmarks();
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [el('div', {}, [
+    el('h1', { class: 'page-title', text: 'Bookmarks' }),
+    el('div', { class: 'page-sub', text: 'Starred moments inside your sessions — jump straight back to them' }),
+  ])]));
+  if (!bookmarks.length) {
+    root.appendChild(el('div', { class: 'empty' }, [
+      el('div', { class: 'big', text: 'No bookmarks yet' }),
+      el('div', { text: 'Open a session and click the 🏷 next to any message to bookmark it.' }),
+    ]));
+  } else {
+    const list = el('div', { class: 'bm-list' });
+    bookmarks.forEach((b) => {
+      const row = el('div', { class: 'bm-row', role: 'button', tabindex: '0' }, [
+        el('div', { class: 'bm-main' }, [
+          el('div', { class: 'bm-title', text: b.session_title || b.session_id }),
+          b.note ? el('div', { class: 'bm-note', text: b.note }) : null,
+          el('div', { class: 'bm-meta', text: `message #${b.seq} · ${fmt.rel(b.created_epoch)}` }),
+        ].filter(Boolean)),
+        el('button', { class: 'x', title: 'Delete bookmark', 'aria-label': 'Delete bookmark', text: '×', onclick: async (e) => { e.stopPropagation(); await API.delBookmark(b.id); toast('Deleted'); viewBookmarks(); } }),
+      ]);
+      const open = () => go('session/' + b.session_id, { seq: b.seq });
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+      list.appendChild(row);
+    });
+    root.appendChild(list);
+  }
+  view().innerHTML = ''; view().appendChild(root);
 }
 
 function buildReplay(timeline) {
@@ -653,7 +799,13 @@ function buildReplay(timeline) {
   nextBtn.addEventListener('click', () => seek(idx + 1));
   track.addEventListener('click', (e) => { const rect = track.getBoundingClientRect(); seek(Math.round(((e.clientX - rect.left) / rect.width) * n)); });
 
-  return { bar, attach(t) { threadEl = t; idx = n; render(); } };
+  return {
+    bar,
+    attach(t) { threadEl = t; idx = n; render(); },
+    toggle() { playing ? stop() : play(); },
+    stepBack() { seek(idx - 1); },
+    stepForward() { seek(idx + 1); },
+  };
 }
 const ICON = {
   restart: '<svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 5V2L7 7l5 5V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-7z" fill="currentColor"/></svg>',
@@ -729,7 +881,73 @@ async function viewAnalytics() {
     ]),
   ]));
 
+  // tool latency (p50/p95/p99) — fetched separately so the page renders fast
+  const latencyPanel = el('div', { class: 'panel', style: 'margin-top:14px' }, [
+    el('div', { class: 'panel-title', text: 'Tool latency (p95)' }),
+    el('div', { class: 'page-sub', text: 'loading…' }),
+  ]);
+  root.appendChild(latencyPanel);
+  API.toolLatency().then(({ latency }) => { latencyPanel.lastChild.replaceWith(latencyChart(latency)); }).catch(() => {});
+
+  // recurring prompt patterns
+  const patternsPanel = el('div', { class: 'panel', style: 'margin-top:14px' }, [
+    el('div', { class: 'panel-title', text: 'Your recurring prompts — things you ask Claude again and again' }),
+    el('div', { class: 'page-sub', text: 'loading…' }),
+  ]);
+  root.appendChild(patternsPanel);
+  API.patterns().then(({ patterns }) => { patternsPanel.lastChild.replaceWith(patternsList(patterns)); }).catch(() => {});
+
+  // report + CSV export toolbar
+  root.appendChild(reportPanel());
+
   view().innerHTML = ''; view().appendChild(root);
+}
+
+// horizontal latency bars: width = p95, green <1s / amber 1-5s / red >5s
+function latencyChart(latency) {
+  const rows = Object.entries(latency || {}).map(([name, v]) => ({ name, ...v }));
+  if (!rows.length) return el('div', { class: 'empty', text: 'No timed tool calls yet' });
+  const max = Math.max(1, ...rows.map((r) => r.p95_ms));
+  const band = (ms) => (ms < 1000 ? 'good' : ms < 5000 ? 'warn' : 'bad');
+  return el('div', { class: 'latency' }, rows.map((r) => el('div', { class: 'lat-row' }, [
+    el('span', { class: 'lat-name', text: r.name }),
+    el('div', { class: 'lat-track', title: `p50 ${Math.round(r.p50_ms)}ms · p95 ${Math.round(r.p95_ms)}ms · p99 ${Math.round(r.p99_ms)}ms · ${r.count} calls` }, [
+      el('div', { class: 'lat-fill ' + band(r.p95_ms), style: `width:${Math.max(3, (r.p95_ms / max) * 100)}%` }),
+      el('div', { class: 'lat-tick', style: `left:${(r.p50_ms / max) * 100}%` }),
+    ]),
+    el('span', { class: 'lat-val', text: fmtMs(r.p95_ms) }),
+  ])));
+}
+function fmtMs(ms) { return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms'; }
+
+function patternsList(patterns) {
+  if (!patterns || !patterns.length) return el('div', { class: 'empty', text: 'No recurring prompts found yet' });
+  return el('div', { class: 'patterns' }, patterns.map((p) => el('div', { class: 'pattern-row' }, [
+    el('div', { class: 'pat-main' }, [
+      el('div', { class: 'pat-text', text: p.canonical_text.length > 120 ? p.canonical_text.slice(0, 120) + '…' : p.canonical_text }),
+      el('div', { class: 'pat-meta', text: `asked ${p.count}× · last ${fmt.rel(p.last_seen_epoch)}` }),
+    ]),
+    el('button', { class: 'btn-ghost', title: 'Copy this prompt', 'aria-label': 'Copy prompt', text: 'Copy', onclick: () => { navigator.clipboard?.writeText(p.canonical_text).then(() => toast('Prompt copied')); } }),
+  ])));
+}
+
+function reportPanel() {
+  const today = new Date();
+  const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const since = el('input', { type: 'date', value: iso(monday), 'aria-label': 'Report start date' });
+  const until = el('input', { type: 'date', value: iso(today), 'aria-label': 'Report end date' });
+  const dl = el('button', { class: 'btn-ghost accent', text: '⬇ Download HTML report', onclick: () => { downloadFrom(API.reportUrl(since.value, until.value, 'html')); toast('Report generated'); } });
+  return el('div', { class: 'panel', style: 'margin-top:14px' }, [
+    el('div', { class: 'panel-title', text: 'Generate report' }),
+    el('div', { class: 'report-bar' }, [
+      el('label', { text: 'From' }), since,
+      el('label', { text: 'to' }), until,
+      dl,
+      el('button', { class: 'btn-ghost', text: '⬇ Analytics CSV', onclick: () => { downloadFrom(API.analyticsCsvUrl()); toast('CSV exported'); } }),
+      el('button', { class: 'btn-ghost', text: '⬇ Sessions CSV', onclick: () => { downloadFrom(API.sessionsCsvUrl()); toast('CSV exported'); } }),
+    ]),
+  ]);
 }
 
 function barList(rows, { max }) {
@@ -1290,9 +1508,44 @@ async function loadSummary() {
   catch (e) { /* ignore */ }
 }
 
+// ---- live updates (Server-Sent Events) ------------------------------------
+// Open a persistent EventSource to /api/events. When the server signals that the
+// index changed (a reindex — via the hook, `watch`, or Sync), show a dismissible
+// toast offering to refresh the current view in place (no full page reload).
+let _liveToast = null;
+function startLiveUpdates() {
+  if (typeof EventSource === 'undefined') return;
+  let es;
+  try { es = new EventSource('/api/events'); } catch (e) { return; }
+  es.addEventListener('message', (ev) => {
+    let data = {};
+    try { data = JSON.parse(ev.data); } catch (e) { return; }
+    if (data.type === 'reindex') showReindexToast();
+  });
+  es.onerror = () => { /* browser auto-reconnects; nothing to do */ };
+}
+
+function showReindexToast() {
+  if (_liveToast) return;  // one at a time
+  const host = $('#toasts');
+  const t = el('div', { class: 'toast live', role: 'status' }, [
+    el('span', { class: 'dot' }),
+    el('span', { text: 'New sessions available — click to reload.' }),
+  ]);
+  const dismiss = () => { if (_liveToast === t) _liveToast = null; t.style.opacity = '0'; setTimeout(() => t.remove(), 300); };
+  t.addEventListener('click', async () => { await loadSummary(); router(); toast('Refreshed'); dismiss(); });
+  host.appendChild(t);
+  _liveToast = t;
+  setTimeout(dismiss, 8000);  // auto-dismiss after 8s
+}
+
 // ---- boot -----------------------------------------------------------------
 window.__cs = { go, ss: () => sessionsState };
 window.addEventListener('hashchange', router);
+// close the bookmark popover on any outside click
+document.addEventListener('click', (e) => {
+  if (_bmPop && !_bmPop.contains(e.target) && !(e.target.closest && e.target.closest('.bm-btn'))) closeBookmarkPopover();
+});
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); CMDK.open ? closeCmdk() : openCmdk(); return; }
   if (!CMDK.open) return;
@@ -1311,4 +1564,5 @@ document.addEventListener('keydown', (e) => {
   await loadSummary();
   if (!location.hash) location.hash = '#/sessions';
   router();
+  startLiveUpdates();
 })();

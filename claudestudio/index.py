@@ -19,6 +19,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 
 from . import parser
 from .parser import ParsedSession
@@ -28,7 +29,10 @@ from .parser import ParsedSession
 # in the `meta` table so an upgrade can migrate forward — and a *downgrade*
 # (opening a newer index with an older build) fails loudly instead of silently
 # returning wrong data.
-SCHEMA_VERSION = 1
+# v2: `sources` gained a `root` column so one index can span several projects
+# roots (work laptop + personal machine + remote). The migration adds the column
+# in place, preserving all indexed data and user state.
+SCHEMA_VERSION = 2
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -47,7 +51,8 @@ CREATE TABLE IF NOT EXISTS sources (
     path        TEXT PRIMARY KEY,
     session_id  TEXT,
     mtime       REAL,
-    size        INTEGER
+    size        INTEGER,
+    root        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -142,6 +147,16 @@ CREATE TABLE IF NOT EXISTS saved_searches (
     filters    TEXT DEFAULT '{}',
     created_at REAL
 );
+
+-- per-message bookmarks — user-owned, never wiped by reindexing (like user_state)
+CREATE TABLE IF NOT EXISTS bookmarks (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT,
+    message_seq   INTEGER,
+    note          TEXT DEFAULT '',
+    created_epoch REAL
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_session ON bookmarks(session_id, message_seq);
 """
 
 
@@ -194,10 +209,14 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
             f"than this build (schema v{SCHEMA_VERSION}). Upgrade ClaudeStudio, "
             f"or delete the index and re-run `claudestudio index` to rebuild it."
         )
-    # Forward migrations go here, ordered and idempotent, e.g.:
-    #   if stored < 2:
-    #       conn.execute("ALTER TABLE sessions ADD COLUMN ...")
-    # Each step lifts an old index to the next version without losing user state.
+    # Forward migrations go here, ordered and idempotent. Each lifts an old index
+    # to the next version without losing indexed data or user state.
+    # v2: multi-root — tag every source with the projects root it came from.
+    # Idempotent: only ALTER when the column is genuinely absent (a fresh db
+    # already has it from the schema script, an old v1 db does not).
+    src_cols = {r[1] for r in conn.execute("PRAGMA table_info(sources)")}
+    if "root" not in src_cols:
+        conn.execute("ALTER TABLE sources ADD COLUMN root TEXT")
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -311,19 +330,53 @@ def _insert_session(conn, ps: ParsedSession) -> None:
     )
 
 
+def normalize_roots(root) -> list[str]:
+    """Coerce the `root` argument into a deduplicated list of root paths.
+
+    Accepts ``None`` (→ the default projects root), a single ``str``/``Path``, or
+    a list/tuple of them — so every existing single-root caller keeps working
+    while power users can index several machines/installs in one index.
+    """
+    if root is None:
+        return [parser.default_projects_root()]
+    if isinstance(root, (str, os.PathLike)):
+        items = [os.fspath(root)]
+    else:
+        items = [os.fspath(r) for r in root]
+    seen, out = set(), []
+    for r in items:
+        r = str(r)
+        if r and r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out or [parser.default_projects_root()]
+
+
 def reindex(
     conn: sqlite3.Connection,
-    root: str | None = None,
+    root=None,
     *,
     force: bool = False,
     progress=None,
 ) -> dict:
-    """Scan the projects root and (incrementally) update the index.
+    """Scan one or more projects roots and (incrementally) update the index.
 
-    Returns a stats dict. `progress(done, total)` is called as files are processed.
+    `root` may be ``None``, a single path, or a list of paths (multi-root). Each
+    indexed file is tagged with the root it was found under, so the API can later
+    filter by root. Returns a stats dict; `progress(done, total)` is called as
+    files are processed.
     """
-    root = root or parser.default_projects_root()
-    files = list(parser.iter_session_files(root)) if os.path.isdir(root) else []
+    roots = normalize_roots(root)
+
+    # (path -> root) across every configured root; first root wins if a file is
+    # reachable from two overlapping roots, so a path maps to exactly one root.
+    file_root: dict[str, str] = {}
+    for rt in roots:
+        if not os.path.isdir(rt):
+            continue
+        for path in parser.iter_session_files(rt):
+            file_root.setdefault(path, rt)
+    files = list(file_root.keys())
     total = len(files)
 
     known = {
@@ -357,8 +410,9 @@ def reindex(
         _delete_session(conn, ps.session_id)  # guard against id collisions
         _insert_session(conn, ps)
         conn.execute(
-            "INSERT OR REPLACE INTO sources(path,session_id,mtime,size) VALUES (?,?,?,?)",
-            (path, ps.session_id, st.st_mtime, st.st_size),
+            "INSERT OR REPLACE INTO sources(path,session_id,mtime,size,root) "
+            "VALUES (?,?,?,?,?)",
+            (path, ps.session_id, st.st_mtime, st.st_size, file_root[path]),
         )
         if (added + updated) % 25 == 0:
             conn.commit()
@@ -377,14 +431,62 @@ def reindex(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('indexed_at',?)",
         (str(time.time()),),
     )
+    # 'root' (first) kept for back-compat; 'roots' holds the full list.
     conn.execute(
-        "INSERT OR REPLACE INTO meta(key,value) VALUES('root',?)", (root,)
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('root',?)", (roots[0],)
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('roots',?)",
+        (json.dumps(roots),),
     )
     conn.commit()
     return {
-        "root": root, "files": total, "added": added, "updated": updated,
-        "skipped": skipped, "removed": removed,
+        "root": roots[0], "roots": roots, "files": total, "added": added,
+        "updated": updated, "skipped": skipped, "removed": removed,
     }
+
+
+def index_db_mtime(db_path: str) -> float:
+    """Modification time of the index file, or 0.0 if it doesn't exist yet.
+
+    The SSE watch endpoint compares this between polls — when it changes, an
+    ``index`` run (hook, CLI, or the in-app Sync) refreshed the data, so connected
+    browsers get a "new sessions" nudge.
+    """
+    try:
+        return os.path.getmtime(db_path)
+    except OSError:
+        return 0.0
+
+
+def newest_source_mtime(root=None) -> float:
+    """Newest mtime among all `.jsonl` session files under the given root(s).
+
+    Pure filesystem scan (no DB), used by `claudestudio watch` to decide when to
+    reindex. Returns 0.0 when nothing is found. Accepts the same `root` shapes as
+    :func:`reindex` (None / str / list).
+    """
+    newest = 0.0
+    for rt in normalize_roots(root):
+        if not os.path.isdir(rt):
+            continue
+        for p in parser.iter_session_files(rt):
+            try:
+                m = os.path.getmtime(p)
+            except OSError:
+                continue
+            if m > newest:
+                newest = m
+    return newest
+
+
+def root_counts(conn) -> list[dict]:
+    """Per-root session counts, for `doctor` / `info` / the Projects view."""
+    rows = conn.execute(
+        "SELECT COALESCE(root,'(unknown)') AS root, COUNT(DISTINCT session_id) AS sessions "
+        "FROM sources GROUP BY root ORDER BY sessions DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -408,3 +510,59 @@ def session_summary(conn) -> dict:
         "tokens": row["tokens"], "cost_usd": row["cost"], "projects": row["projects"],
         "indexed_at": float(indexed_at["value"]) if indexed_at else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# per-message bookmarks  (user state — survives reindexing, never wiped)
+# ---------------------------------------------------------------------------
+
+def add_bookmark(conn, session_id: str, seq, note: str = "") -> dict:
+    """Create a bookmark on one message of a session. Returns the new row.
+
+    `seq` is the message's sequence index inside the session (0-based, as the
+    timeline/replay use). The id is a random hex token so the client never has to
+    guess it. Bookmarks live in their own table and are untouched by reindexing.
+    """
+    try:
+        s = int(seq)
+    except (TypeError, ValueError):
+        s = 0
+    bid = uuid.uuid4().hex
+    epoch = time.time()
+    conn.execute(
+        "INSERT INTO bookmarks(id,session_id,message_seq,note,created_epoch) "
+        "VALUES(?,?,?,?,?)",
+        (bid, session_id, s, str(note or ""), epoch),
+    )
+    conn.commit()
+    return {"id": bid, "session_id": session_id, "seq": s,
+            "note": str(note or ""), "created_epoch": epoch}
+
+
+def delete_bookmark(conn, bookmark_id: str) -> dict:
+    cur = conn.execute("DELETE FROM bookmarks WHERE id=?", (str(bookmark_id),))
+    conn.commit()
+    return {"deleted": cur.rowcount > 0, "id": bookmark_id}
+
+
+def list_bookmarks(conn, session_id: str | None = None) -> list[dict]:
+    """All bookmarks (newest first), or just one session's when `session_id` is set.
+
+    Joins the session title so a global bookmarks view can deep-link with context.
+    """
+    if session_id:
+        rows = conn.execute(
+            "SELECT b.id, b.session_id, b.message_seq AS seq, b.note, b.created_epoch, "
+            "       COALESCE(s.title,'') AS session_title "
+            "FROM bookmarks b LEFT JOIN sessions s USING(session_id) "
+            "WHERE b.session_id=? ORDER BY b.message_seq ASC, b.created_epoch ASC",
+            (session_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT b.id, b.session_id, b.message_seq AS seq, b.note, b.created_epoch, "
+            "       COALESCE(s.title,'') AS session_title "
+            "FROM bookmarks b LEFT JOIN sessions s USING(session_id) "
+            "ORDER BY b.created_epoch DESC, b.id ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]

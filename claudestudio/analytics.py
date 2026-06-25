@@ -133,3 +133,51 @@ def top_projects(conn, limit: int = 12) -> list[dict]:
 
 def projects(conn) -> list[dict]:
     return top_projects(conn, limit=10_000)
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float:
+    """Nearest-rank percentile of an already-sorted list (p in 0..1)."""
+    if not sorted_vals:
+        return 0.0
+    import math
+    k = max(1, math.ceil(p * len(sorted_vals)))
+    return sorted_vals[min(k, len(sorted_vals)) - 1]
+
+
+def tool_latency(conn) -> dict:
+    """Per-tool latency (ms), derived from message timestamps in the index.
+
+    A tool call's start is its (assistant) message's timestamp; its end is the
+    next timestamped message in the same session — the turn that carried the
+    tool result. Calls without a usable start/end pair are skipped (never
+    crashes). Returns ``{tool_name: {count, p50_ms, p95_ms, p99_ms, max_ms,
+    mean_ms}}`` so the Tools dashboard can rank tools by how slow they are.
+    """
+    rows = conn.execute(
+        """SELECT t.name AS name, m.epoch AS start_epoch,
+                  (SELECT MIN(m2.epoch) FROM messages m2
+                   WHERE m2.session_id = t.session_id
+                     AND m2.seq > t.seq AND m2.epoch > 0) AS end_epoch
+           FROM tool_calls t
+           JOIN messages m ON m.session_id = t.session_id AND m.seq = t.seq
+           WHERE m.epoch > 0"""
+    ).fetchall()
+    buckets: dict[str, list] = {}
+    for r in rows:
+        start, end = r["start_epoch"], r["end_epoch"]
+        if not start or not end or end <= start:
+            continue
+        buckets.setdefault(r["name"], []).append((end - start) * 1000.0)
+    out: dict[str, dict] = {}
+    for name, vals in buckets.items():
+        vals.sort()
+        out[name] = {
+            "count": len(vals),
+            "p50_ms": round(_percentile(vals, 0.50), 1),
+            "p95_ms": round(_percentile(vals, 0.95), 1),
+            "p99_ms": round(_percentile(vals, 0.99), 1),
+            "max_ms": round(vals[-1], 1),
+            "mean_ms": round(sum(vals) / len(vals), 1),
+        }
+    # slowest p95 first — the order the dashboard wants
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["p95_ms"]))

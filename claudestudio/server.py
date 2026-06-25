@@ -13,7 +13,7 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import api, index
 
@@ -210,6 +210,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_zip(self, data, filename, status=200):
+        self.send_response(status)
+        self._emit_security_headers()
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _read_body(self):
         """Parse a JSON request body, robust to a malformed Content-Length.
 
@@ -277,6 +287,22 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/state/"):
                     sid = path[len("/api/state/"):]
                     return self._send_json(api.set_state(conn, sid, body))
+                # --- v0.5.2 write endpoints ---
+                if path == "/api/budget":
+                    return self._send_json(api.set_budget(conn, body))
+                if path == "/api/prompts/extract":
+                    return self._send_json(api.extract_prompts(conn, body))
+                if path == "/api/prompts":
+                    return self._send_json(api.add_prompt(conn, body))
+                if path == "/api/export/batch":
+                    out = api.export_batch(
+                        conn, body.get("session_ids", []),
+                        body.get("format", "md"), body.get("include_index", True),
+                    )
+                    return self._send_zip(out["bytes"], out["filename"])
+                if path.startswith("/api/session/") and path.endswith("/annotations"):
+                    sid = path[len("/api/session/"):-len("/annotations")]
+                    return self._send_json(api.upsert_annotation(conn, sid, body))
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001 - surface as JSON, never 500-crash
@@ -298,6 +324,16 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/bookmark/"):
                     bid = path[len("/api/bookmark/"):]
                     return self._send_json(api.delete_bookmark(conn, bid))
+                # --- v0.5.2 delete endpoints ---
+                if path == "/api/budget":
+                    return self._send_json(api.clear_budget(conn))
+                if path.startswith("/api/session/") and "/annotations/" in path:
+                    rest = path[len("/api/session/"):]
+                    _sid, _, aid = rest.partition("/annotations/")
+                    return self._send_json(api.delete_annotation(conn, aid))
+                if path.startswith("/api/prompts/"):
+                    pid = path[len("/api/prompts/"):]
+                    return self._send_json(api.delete_prompt(conn, pid))
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001
@@ -334,6 +370,24 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.highlights_payload(conn))
                 if path == "/api/prompts/patterns":
                     return self._send_json(api.prompt_patterns(conn, params))
+                # --- v0.5.2 read endpoints ---
+                if path == "/api/budget":
+                    return self._send_json(api.budget_status(conn))
+                if path == "/api/analytics/efficiency":
+                    return self._send_json(api.efficiency(conn))
+                if path == "/api/prompts":
+                    return self._send_json(api.list_prompts(conn, params))
+                if path == "/api/annotations/search":
+                    return self._send_json(api.search_annotations(conn, params))
+                if path.startswith("/api/project/") and path.endswith("/claude-md"):
+                    pid = unquote(path[len("/api/project/"):-len("/claude-md")])
+                    return self._send_json(api.project_claude_md(conn, pid))
+                if path.startswith("/api/session/") and path.endswith("/annotations"):
+                    sid = path[len("/api/session/"):-len("/annotations")]
+                    return self._send_json(api.get_annotations(conn, sid))
+                if path.startswith("/api/session/") and path.endswith("/diffs"):
+                    sid = path[len("/api/session/"):-len("/diffs")]
+                    return self._send_json(api.diffs_for_session(conn, sid, params.get("file")))
                 if path == "/api/report.json":
                     return self._send_json(api.report_json(conn, params))
                 if path in ("/api/report", "/api/report.html", "/api/report.md"):

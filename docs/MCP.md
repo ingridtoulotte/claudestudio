@@ -71,6 +71,53 @@ JSON document.
 | `ask_history` | `question: str`, `session_id?: str` | A grounded, cited answer computed locally (no model calls). |
 | `list_bookmarks` | `session_id?: str` | Per-message bookmarks (starred moments). Optionally scope to one session. |
 | `get_prompt_patterns` | `min_count?: int = 3` | Recurring prompt clusters — the prompt shapes you repeat — with counts. |
+| `get_cost_by_period` | `period?: "daily"\|"weekly"\|"monthly" = monthly`, `n?: int = 6` | Spend, token totals and session counts for the last N calendar periods. *(v0.5.2)* |
+| `get_diff_for_session` | `session_id: str`, `file_path?: str` | Every inline file diff in a session (old→new for each edit/write), optionally filtered to one file. *(v0.5.2)* |
+| `get_annotations` | `session_id: str` | The user's inline annotations on a session (whole-session + per-message notes). *(v0.5.2)* |
+| `generate_project_brief` | `project_id: str` | A full onboarding brief: sessions, spend, top files/tools, last activity, and an inferred CLAUDE.md profile. *(v0.5.2)* |
+
+### v0.5.2 tool examples
+
+`get_cost_by_period` — "how much did I spend this week?" answered from local logs:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":5,"method":"tools/call",
+ "params":{"name":"get_cost_by_period","arguments":{"period":"weekly","n":4}}}
+// ← text content holding {"period":"weekly","periods":[
+//    {"period":"2026-W24","sessions":7,"cost_usd":3.81,"tokens":1840221}, …]}
+```
+
+`get_diff_for_session` — show exactly what a session changed:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":6,"method":"tools/call",
+ "params":{"name":"get_diff_for_session","arguments":{"session_id":"…","file_path":"parser.py"}}}
+// ← text content holding {"session_id":"…","file_path":"parser.py","diffs":[
+//    {"seq":14,"tool":"Edit","file":"parser.py","diff":"--- a/parser.py\n+++ b/parser.py\n@@ …","truncated":false}]}
+```
+
+`get_annotations` — recall the notes you attached:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":7,"method":"tools/call",
+ "params":{"name":"get_annotations","arguments":{"session_id":"…"}}}
+// ← text content holding {"session_id":"…","annotations":[
+//    {"id":3,"session_id":"…","message_idx":-1,"note":"the race-condition fix","created_at":…,"updated_at":…}]}
+```
+
+`generate_project_brief` — get up to speed on a project in one call:
+
+```jsonc
+// →
+{"jsonrpc":"2.0","id":8,"method":"tools/call",
+ "params":{"name":"generate_project_brief","arguments":{"project_id":"orbit-api"}}}
+// ← text content holding {"project_name":"orbit-api","found":true,"sessions":23,
+//    "cost_usd":14.2,"top_files":[…],"top_tools":[…],"tech_stack":["Python", …],
+//    "last_activity":"2026-06-24T…","profile":{…}}
+```
 
 ### Example invocations
 

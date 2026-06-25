@@ -11,12 +11,20 @@ import io
 import json
 import math
 import os
+import re
 import sqlite3
 import tempfile
 
 import claudestudio
 
 from . import analytics, api, ask, cli, export, fixtures, index, parser, pricing, wrapped
+
+_WEEK_RE = re.compile(r"^\d{4}-W\d{2}$")
+
+
+def re_match_week(s: str) -> bool:
+    """True if `s` is an ISO week label like '2026-W23' (selftest helper)."""
+    return bool(_WEEK_RE.match(str(s)))
 
 
 class Check:
@@ -553,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 10, "mcp exposes 10 tools")
+        c.eq(len(tl["result"]["tools"]), 14, "mcp exposes 14 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -617,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.5.1", "package version bumped to 0.5.1")
-        c.eq(init["result"]["serverInfo"]["version"], "0.5.1", "mcp serverInfo is 0.5.1")
+        c.eq(claudestudio.__version__, "0.5.2", "package version bumped to 0.5.2")
+        c.eq(init["result"]["serverInfo"]["version"], "0.5.2", "mcp serverInfo is 0.5.2")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.5.1" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "10" in out, "cli info reports the 10 MCP tools")
+        c.ok("0.5.2" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "14" in out, "cli info reports the 14 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -773,6 +781,200 @@ def run() -> int:
         gpp, err = _call("get_prompt_patterns", {"min_count": 3})
         c.ok(not err and "patterns" in gpp, "mcp get_prompt_patterns returns patterns")
 
+        # =================================================================
+        # v0.5.2 features
+        # =================================================================
+        import zipfile
+
+        from . import budget as budgetmod
+        from . import generate_claude_md as genmd
+        from . import git_context, health
+        from . import prompt_library as plib
+
+        # --- F10: health score (pure function + boundaries + column) ------
+        _pj = parser.parse_file(exp["path"])
+        _hs = health.compute_health_score(_pj)
+        c.ok(0 <= _hs["score"] <= 100, "health score is within 0..100")
+        c.ok(_hs["grade"] in ("A", "B", "C", "D", "F"), "health grade is a letter")
+        c.eq(set(_hs["components"]),
+             {"tool_success", "error_density", "token_efficiency", "completion_signal"},
+             "health exposes its four components")
+        c.eq(health.grade_for(95), "A", "grade boundary: 95 → A")
+        c.eq(health.grade_for(85), "B", "grade boundary: 85 → B")
+        c.eq(health.grade_for(70), "C", "grade boundary: 70 → C")
+        c.eq(health.grade_for(55), "D", "grade boundary: 55 → D")
+        c.eq(health.grade_for(10), "F", "grade boundary: 10 → F")
+        # a perfect run scores higher than a flat-out failure
+        _good = health.compute(tool_calls=10, tool_errors=0, input_tokens=1000,
+                               output_tokens=4000, msg_count=20, completion_signal=1.0)
+        _bad = health.compute(tool_calls=10, tool_errors=10, input_tokens=4000,
+                              output_tokens=10, msg_count=4, completion_signal=0.0)
+        c.ok(_good["score"] > _bad["score"], "healthy session outscores a failed one")
+        c.eq(health.completion_signal_for("user", False, False), 0.0,
+             "completion: ending on a user prompt = abandoned (0.0)")
+        c.eq(health.completion_signal_for("assistant", False, False), 1.0,
+             "completion: clean assistant wrap-up = 1.0")
+
+        # health column populated by indexing + sort + get_session breakdown
+        hsdb = os.path.join(tmp, "health.db")
+        hsconn = index.connect(hsdb)
+        index.reindex(hsconn, root)
+        _hrow = hsconn.execute(
+            "SELECT health_score FROM sessions WHERE session_id=?",
+            (exp["session_id"],)).fetchone()
+        c.ok(_hrow["health_score"] is not None, "indexing caches a health_score on the row")
+        _hl = api.list_sessions(hsconn, {"sort": "health"})
+        c.ok(_hl["sessions"] and "health_score" in _hl["sessions"][0],
+             "list_sessions sorts by health + carries the score")
+        _hd = api.get_session(hsconn, exp["session_id"])
+        c.ok(_hd["health"]["grade"] in ("A", "B", "C", "D", "F"),
+             "get_session attaches a health breakdown")
+        c.ok("git" in _hd, "get_session always carries a git key (may be null)")
+
+        # --- F7: git context (best-effort, never raises) -----------------
+        c.eq(git_context.get_git_context(os.path.join(tmp, "no-such-repo"), 1_700_000_000.0),
+             None, "git context on a non-repo path is None (no raise)")
+        c.eq(git_context.get_current_branch(os.path.join(tmp, "no-such-repo")), None,
+             "current branch on a non-repo path is None")
+        c.eq(git_context.get_git_context("", 0), None, "git context on empty path is None")
+        hsconn.close()
+
+        # --- F3: budget tracker ------------------------------------------
+        c.ok(not budgetmod.budget_status(hconn)["has_budget"],
+             "budget status reports no budget initially")
+        _set = budgetmod.set_budget(hconn, "monthly", 10.0)
+        c.eq(_set["ceiling_usd"], 10.0, "set_budget stores the ceiling")
+        _bnow = _dt.datetime.fromtimestamp(_far_day)  # month with the seeded spend
+        _bs = budgetmod.budget_status(hconn, now=_bnow)
+        c.ok(_bs["has_budget"] and _bs["spent_usd"] > 0,
+             "budget status computes spend in the active period")
+        c.eq(set(_bs) >= {"period", "ceiling_usd", "spent_usd", "percent",
+                          "remaining_usd", "sessions_this_period", "alert"}, True,
+             "budget status has the full structure")
+        c.ok(_bs["alert"], "budget over 75% raises the alert flag (seeded spend > $10)")
+        c.ok(budgetmod.clear_budget(hconn)["cleared"], "clear_budget removes it")
+        c.ok(not budgetmod.budget_status(hconn)["has_budget"], "budget gone after clear")
+
+        # --- F5: annotations (CRUD + FTS + survive reindex) --------------
+        _a1 = index.upsert_annotation(hconn, "mara", -1, "the big scheduler refactor")
+        c.ok(_a1["id"] and _a1["message_idx"] == -1, "session-level annotation upserts")
+        _a2 = index.upsert_annotation(hconn, "mara", 2, "this edit fixed the race")
+        c.eq(len(index.list_annotations(hconn, "mara")), 2,
+             "session + message annotations coexist")
+        _a1b = index.upsert_annotation(hconn, "mara", -1, "updated note text")
+        c.eq(_a1b["id"], _a1["id"], "re-annotating the same target updates in place")
+        c.eq(len(index.list_annotations(hconn, "mara")), 2, "no duplicate on update")
+        _asr = index.search_annotations(hconn, "scheduler")
+        c.eq(_asr, [], "FTS reflects the update (old 'scheduler' text gone)")
+        _asr2 = index.search_annotations(hconn, "race")
+        c.ok(any(r["session_id"] == "mara" for r in _asr2),
+             "FTS finds an annotation by note content")
+        c.ok(index.delete_annotation(hconn, _a2["id"])["deleted"], "annotation deletes")
+        c.eq(len(index.list_annotations(hconn, "mara")), 1, "one annotation left after delete")
+        c.eq(index.search_annotations(hconn, "race"), [], "deleted note drops out of FTS")
+        c.eq(api.get_annotations(hconn, "mara")["annotations"][0]["note"], "updated note text",
+             "api.get_annotations surfaces the note")
+        # annotations survive a reindex (they live in their own table)
+        annsurv_db = os.path.join(tmp, "annsurv.db")
+        asconn = index.connect(annsurv_db)
+        index.reindex(asconn, root)
+        index.upsert_annotation(asconn, exp["session_id"], -1, "keep me across reindex")
+        index.reindex(asconn, root, force=True)
+        c.eq(len(index.list_annotations(asconn, exp["session_id"])), 1,
+             "annotation survives a forced reindex")
+        asconn.close()
+
+        # --- F8: prompt library (extract + CRUD + search) ----------------
+        _ex = api.extract_prompts(hconn, {"min_count": 3})
+        c.ok(_ex["extracted"] >= 1, "extract_prompts seeds the library from history")
+        c.ok(any("auth module" in p["text"] for p in index.list_prompts(hconn)),
+             "extracted library includes the recurring auth-tests prompt")
+        c.ok(index.list_prompts(hconn, q="auth"), "prompt library substring search works")
+        _man = index.upsert_prompt(hconn, text="Refactor this for readability",
+                                   source="manual", starred=True)
+        c.ok(_man["starred"], "manual prompt can be starred")
+        c.ok(all(p["starred"] for p in index.list_prompts(hconn, starred=True)),
+             "starred filter returns only starred prompts")
+        c.ok(plib.score_prompt_reusability("write tests for the auth module")
+             > plib.score_prompt_reusability("fix /home/dev/x.py line 4231 today"),
+             "reusability score rewards templates over one-off references")
+        c.ok(index.delete_prompt(hconn, _man["id"])["deleted"], "library prompt deletes")
+        # idempotent extraction: same ids, no duplicate rows
+        _n1 = len(index.list_prompts(hconn, limit=1000))
+        api.extract_prompts(hconn, {"min_count": 3})
+        c.eq(len(index.list_prompts(hconn, limit=1000)), _n1,
+             "re-extraction is idempotent (stable ids, no duplicates)")
+
+        # --- F4: CLAUDE.md generator -------------------------------------
+        _cm = api.project_claude_md(hconn, "p")
+        c.ok(_cm["profile"]["found"], "analyse_project finds the 'p' project")
+        for _sec in ("## Project Overview", "## Key Files", "## Conventions Observed",
+                     "## Common Pitfalls", "## Preferred Patterns"):
+            c.ok(_sec in _cm["markdown"], f"generated CLAUDE.md has the {_sec!r} section")
+        c.ok("engine.py" in _cm["markdown"], "CLAUDE.md surfaces the most-edited file")
+        c.eq(genmd.analyse_project(hconn, "no-such-project")["found"], False,
+             "analyse_project returns found=False for an unknown project")
+
+        # --- F6: token-efficiency dashboard ------------------------------
+        _eff = api.efficiency(hconn)
+        c.eq(set(_eff), {"overall", "by_project", "trend"}, "efficiency has its 3 sections")
+        c.eq(set(_eff["overall"]),
+             {"output_tokens_per_dollar", "tool_success_rate",
+              "avg_messages_per_session", "median_session_duration_s"},
+             "efficiency overall has the 4 KPIs")
+        c.ok(0.0 <= _eff["overall"]["tool_success_rate"] <= 1.0,
+             "tool_success_rate is a fraction")
+        _ranks = [p["efficiency_rank"] for p in _eff["by_project"]]
+        c.eq(_ranks, sorted(_ranks), "by_project is sorted by efficiency_rank ascending")
+        c.ok(all(re_match_week(t["week"]) for t in _eff["trend"]),
+             "trend weeks are formatted YYYY-Www")
+
+        # --- F11: batch export + archive ---------------------------------
+        _bx = api.export_batch(hconn, ["mara", "rec1"], "md", include_index=True)
+        c.ok(_bx["content_type"] == "application/zip", "batch export is a zip")
+        c.eq(_bx["count"], 2, "batch export wrote both sessions")
+        _zf = zipfile.ZipFile(io.BytesIO(_bx["bytes"]))
+        _names = _zf.namelist()
+        c.ok("index.md" in _names, "batch zip contains the index.md table of contents")
+        c.ok(sum(1 for n in _names if n != "index.md") == 2,
+             "batch zip contains one file per session")
+        c.ok("| Session |" in _zf.read("index.md").decode("utf-8"),
+             "index.md is a session table of contents")
+        _bx0 = api.export_batch(hconn, [], "md", include_index=False)
+        c.eq(_bx0["count"], 0, "batch export of nothing is an empty (valid) zip")
+
+        # --- F9: cost-by-period + per-session diffs ----------------------
+        _cbp = api.cost_by_period(hconn, "monthly", 6)
+        c.ok("periods" in _cbp and isinstance(_cbp["periods"], list),
+             "cost_by_period returns a periods list")
+        if _cbp["periods"]:
+            c.eq(set(_cbp["periods"][0]) >= {"period", "sessions", "cost_usd", "tokens"},
+                 True, "each period has spend/token/session totals")
+        _dfs = api.diffs_for_session(hconn, "df")
+        c.ok(_dfs["diffs"] and _dfs["diffs"][0]["diff"].startswith("---"),
+             "diffs_for_session returns the session's unified diffs")
+        c.ok(api.diffs_for_session(hconn, "df", "z.py")["diffs"],
+             "diffs_for_session filters by filename (match)")
+        c.eq(api.diffs_for_session(hconn, "df", "nope.py")["diffs"], [],
+             "diffs_for_session filters by filename (no match)")
+
+        # --- F9: the four new MCP tools dispatch -------------------------
+        _names = {t["name"] for t in tl["result"]["tools"]}
+        c.ok({"get_cost_by_period", "get_diff_for_session", "get_annotations",
+              "generate_project_brief"} <= _names,
+             "mcp exposes the four v0.5.2 tools")
+        _gc, err = _call("get_cost_by_period", {"period": "monthly", "n": 3})
+        c.ok(not err and "periods" in _gc, "mcp get_cost_by_period returns periods")
+        _gd, err = _call("get_diff_for_session", {"session_id": "df"})
+        c.ok(not err and _gd["diffs"], "mcp get_diff_for_session returns diffs")
+        # upsert a note so the MCP annotations tool has something to surface
+        index.upsert_annotation(hconn, "spike", -1, "watch this expensive session")
+        _ga, err = _call("get_annotations", {"session_id": "spike"})
+        c.ok(not err and _ga["annotations"], "mcp get_annotations surfaces a stored note")
+        _gb, err = _call("generate_project_brief", {"project_id": "p"})
+        c.ok(not err and _gb["found"] and _gb["sessions"] >= 1,
+             "mcp generate_project_brief returns a populated brief")
+
         hconn.close()
 
         # --- F7: multi-root indexing (own db so ids stay distinct) -------
@@ -803,7 +1005,8 @@ def run() -> int:
         rcounts = {r["root"]: r["sessions"] for r in index.root_counts(mrconn)}
         c.eq(rcounts.get(root_a), 2, "root_counts tallies root-a")
         c.eq(rcounts.get(root_b), 1, "root_counts tallies root-b")
-        c.eq(index.stored_schema_version(mrconn), 2, "multi-root index is schema v2")
+        c.eq(index.stored_schema_version(mrconn), index.SCHEMA_VERSION,
+             "multi-root index is at the current schema version")
         mrconn.close()
 
     # --- web assets: guard the SPA wiring the UI behaviors depend on ------
@@ -884,6 +1087,50 @@ def run() -> int:
          "app.js: Space toggles replay play/pause")
     c.ok("'ArrowLeft'" in app_js and "'ArrowRight'" in app_js,
          "app.js: arrow keys step the replay")
+
+    # --- v0.5.2 web wiring -------------------------------------------------
+    with open(os.path.join(web_dir, "keyboard.js"), encoding="utf-8") as fh:
+        kbd_js = fh.read()
+    # F10 health: A–F dot in the list, breakdown card in detail
+    c.ok("function healthDot(" in app_js, "app.js: health dot renderer exists")
+    c.ok("function detailContext(" in app_js, "app.js: detail context (git/health/note) exists")
+    c.ok(".health-dot" in css and ".health-card" in css, "css: health dot + card styled")
+    # F7 git badge
+    c.ok(".git-badge" in css, "css: git context badge styled")
+    c.ok("s.git" in app_js, "app.js: detail reads the session git context")
+    # F5 annotations
+    c.ok("saveAnnotation" in app_js and "function annotationEditor(" in app_js,
+         "app.js: annotation editor wired to the save endpoint")
+    c.ok(".annotate" in css, "css: annotation editor styled")
+    # F3 budget
+    c.ok("function checkBudget(" in app_js and "/api/budget" in app_js,
+         "app.js: budget banner wired to the endpoint")
+    c.ok("function radialArc(" in app_js, "app.js: pure-SVG budget arc exists")
+    c.ok(".budget-banner" in css and ".budget-arc" in css, "css: budget banner + arc styled")
+    # F6 efficiency
+    c.ok("function viewEfficiency(" in app_js and "/api/analytics/efficiency" in app_js,
+         "app.js: efficiency view wired to the endpoint")
+    c.ok(".eff-kpi" in css and ".eff-fill" in css, "css: efficiency KPIs + bars styled")
+    # F8 prompt library
+    c.ok("function viewPrompts(" in app_js and "function promptCard(" in app_js,
+         "app.js: prompt library view + cards exist")
+    c.ok("/api/prompts/extract" in app_js, "app.js: prompt extraction wired")
+    c.ok(".prompt-card" in css, "css: prompt cards styled")
+    # F4 CLAUDE.md modal
+    c.ok("function openClaudeMdModal(" in app_js and "claudeMd" in app_js,
+         "app.js: CLAUDE.md modal wired")
+    c.ok(".cs-modal" in css, "css: CLAUDE.md modal styled")
+    # F12 keyboard navigation system
+    c.ok("keyboard.js" in index_html, "index.html: loads the keyboard navigation script")
+    c.ok("class KeyboardNavigator" in kbd_js or "function KeyboardNavigator(" in kbd_js,
+         "keyboard.js: KeyboardNavigator class exists")
+    c.ok("cs:navigate" in kbd_js and "cs:action" in kbd_js,
+         "keyboard.js: emits cs:navigate / cs:action intents")
+    c.ok("kbd-cheat" in kbd_js and ".kbd-cheat" in css,
+         "keyboard.js: '?' cheat-sheet overlay present + styled")
+    # nav exposes the two new top-level views
+    c.ok("'efficiency'" in app_js and "'prompts'" in app_js,
+         "app.js: router registers the efficiency + prompts routes")
 
     # every <button> in the shipped shell has an accessible name (text/aria/title)
     import html.parser as _hp

@@ -162,6 +162,34 @@ def _t_get_prompt_patterns(conn, args: dict) -> dict:
     return {"patterns": patterns.extract_patterns(conn, min_count=min_count)}
 
 
+# --- v0.5.2 tools (F9) -----------------------------------------------------
+
+def _t_get_cost_by_period(conn, args: dict) -> dict:
+    """Spend / tokens / session counts for the last N calendar periods."""
+    period = str(args.get("period") or "monthly")
+    n = api._int_param(args.get("n"), 6, lo=1, hi=120)
+    return api.cost_by_period(conn, period, n)
+
+
+def _t_get_diff_for_session(conn, args: dict) -> dict:
+    """Every inline file diff in a session (optionally filtered to one file)."""
+    sid = str(args.get("session_id") or "")
+    file_path = args.get("file_path") or None
+    return api.diffs_for_session(conn, sid, file_path)
+
+
+def _t_get_annotations(conn, args: dict) -> dict:
+    """The user's inline session/message annotations (the v0.5.2 notes table)."""
+    sid = str(args.get("session_id") or "")
+    return api.get_annotations(conn, sid)
+
+
+def _t_generate_project_brief(conn, args: dict) -> dict:
+    """A full onboarding brief for a project: stats + the CLAUDE.md profile."""
+    pid = str(args.get("project_id") or args.get("project") or "")
+    return api.project_brief(conn, pid)
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -271,6 +299,52 @@ TOOLS = [
             },
         },
         "handler": _t_get_prompt_patterns,
+    },
+    {
+        "name": "get_cost_by_period",
+        "description": "Spend, token totals and session counts for the last N calendar periods. Use this when asked 'how much did I spend this week/month?' — grounded in the local index, no estimate.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "enum": ["daily", "weekly", "monthly"],
+                           "description": "bucket size (default monthly)"},
+                "n": {"type": "integer", "description": "how many recent periods (default 6)"},
+            },
+        },
+        "handler": _t_get_cost_by_period,
+    },
+    {
+        "name": "get_diff_for_session",
+        "description": "Every inline file diff in a session (old→new for each edit/write), optionally filtered to one file. Use this to show exactly what a session changed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "file_path": {"type": "string", "description": "optional: only diffs for this file (matched by basename)"},
+            },
+            "required": ["session_id"],
+        },
+        "handler": _t_get_diff_for_session,
+    },
+    {
+        "name": "get_annotations",
+        "description": "The user's inline annotations on a session — personal notes attached to the session or individual messages. Use this to recall human context the user wrote.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_get_annotations,
+    },
+    {
+        "name": "generate_project_brief",
+        "description": "A full onboarding brief for one project: session count, spend, top files, top tools, last activity and an inferred CLAUDE.md profile. One call to get up to speed on a project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_id": {"type": "string", "description": "project path or short name"}},
+            "required": ["project_id"],
+        },
+        "handler": _t_generate_project_brief,
     },
 ]
 

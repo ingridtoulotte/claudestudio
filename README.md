@@ -48,8 +48,40 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - 📘 **Message bookmarks** — star a *specific* message, not just a session, and deep-link straight back to it. *(new in v0.5.1)*
 - 🔀 **Inline diffs** — see a real unified diff of every edit in the replay, not raw tool args. *(new in v0.5.1)*
 - 📄 **Activity reports** — a shareable, print-ready HTML/Markdown summary of any week or month (`claudestudio report`). *(new in v0.5.1)*
+- 🩺 **Session health scores** — a deterministic 0–100 grade per session (tool success, errors, token efficiency, completion) as a coloured A–F dot. *(new in v0.5.2)*
+- 💰 **Budget tracker** — set a `$/month` or `$/week` ceiling and get a radial-arc gauge plus a spend-alert banner, all from local logs. *(new in v0.5.2)*
+- 📘 **CLAUDE.md generator** — `claudestudio generate-claude-md` writes a `CLAUDE.md` from how you actually work on a project. *(new in v0.5.2)*
+- ✎ **Session annotations** — attach searchable personal notes to any session or message; they survive reindexing. *(new in v0.5.2)*
+- ⚡ **Efficiency dashboard** — output-per-dollar, tool-success rate, and a per-project efficiency ranking. *(new in v0.5.2)*
+- 📚 **Prompt library** — auto-extract your most reusable prompts, plus star/search your own. *(new in v0.5.2)*
 
 ---
+
+## 🆕 What's new in v0.5.2
+
+- **Session health scores** — a deterministic 0–100 grade per session (`health.py`), cached on the index, shown as an A–F dot in the list and a breakdown card in the detail view. `list --sort health`.
+- **Budget tracker & alerts** — `claudestudio budget --set 50 --period monthly`, `GET/POST/DELETE /api/budget`; a radial-arc gauge in the Efficiency view and a spend-alert banner.
+- **CLAUDE.md generator** — `claudestudio generate-claude-md`, `GET /api/project/{id}/claude-md`; analyses a project's history into a paste-ready `CLAUDE.md`.
+- **Session annotations** — notes on a session or message, FTS5-searchable, survive reindexing (`/api/session/{id}/annotations`, `/api/annotations/search`).
+- **Efficiency dashboard** — `GET /api/analytics/efficiency`: output-per-dollar, success rate, per-project ranking, 12-week trend.
+- **Git context** — a `🔀 branch @ sha` badge resolved from `git log` (read-only, cached, never raises).
+- **Prompt library** — `/api/prompts` (+ `?q=`, `?starred=1`), `POST /api/prompts/extract`; a Prompts view in the sidebar.
+- **Batch export** — `claudestudio export --all --zip`, `POST /api/export/batch` (ZIP + generated `index.md`).
+- **Keyboard navigation** — `web/keyboard.js` (`KeyboardNavigator`, `?` cheat sheet).
+- **Four new MCP tools** (10 → **14**): `get_cost_by_period`, `get_diff_for_session`, `get_annotations`, `generate_project_brief`.
+- **Full API reference** at [`docs/API.md`](docs/API.md). Self-test grew 301 → **396** checks; schema **v3**.
+
+## 🛠 For power users
+
+| Shortcut | Action |
+|---|---|
+| `/` | Open search palette |
+| `j` / `k` | Navigate sessions / messages |
+| `?` | Show all shortcuts |
+| `s` | Star/unstar session |
+| `e` | Export session |
+
+<details><summary>What's new in v0.5.1</summary>
 
 ## 🆕 What's new in v0.5.1
 
@@ -60,7 +92,9 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - **Activity report** — `claudestudio report`, `/api/report.html|.json`, print-optimized.
 - **Per-tool latency** (`/api/tools/latency`), **multi-root** (`--root a:b`, schema v2), **prompt patterns** (`/api/prompts/patterns`, MCP tool `get_prompt_patterns`).
 - **Export+**: print CSS, CSV (`/api/analytics.csv`, `/api/sessions.csv`), `export --all`.
-- **`--version` + `info`**. Self-test grew 209 → **301** checks; MCP now exposes **10** tools.
+- **`--version` + `info`**. Self-test grew 209 → **301** checks; MCP exposed **10** tools.
+
+</details>
 
 <details><summary>What's new in v0.5.0</summary>
 
@@ -265,8 +299,13 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 | Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
 | Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ✅ deterministic |
 | Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 10 tools      |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 14 tools      |
 | Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| Inline file diffs in replay   | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
+| Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| Budget tracking & spend alerts| ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| Session health scoring        | ❌                | ❌             | ❌                 | ❌                  | ✅               |
+| Keyboard navigation           | ❌                | ❌             | ⚠️                 | ⚠️                  | ✅               |
 | Message bookmarks + deep links| ❌                | ❌             | ❌                 | ❌                  | ✅               |
 | 100% local, no telemetry      | ✅                | ✅             | ⚠️                 | ✅                  | ✅               |
 | **No install / no toolchain** | —                 | ✅             | ❌                 | ❌ (Rust/Tauri)     | ✅ `pipx run`    |
@@ -348,7 +387,9 @@ python -m claudestudio [command]
   stats          headline numbers
   doctor         diagnose environment & index health
   demo           generate synthetic data & explore --count N --serve
-  --selftest     run the built-in correctness suite (154 checks, no deps)
+  budget         track spend against a monthly/weekly ceiling
+  generate-claude-md   write a CLAUDE.md from a project's history
+  --selftest     run the built-in correctness suite (396 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
@@ -389,13 +430,23 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] **Message bookmarks** with deep links — _v0.5.1_
 - [x] **Activity reports** (shareable HTML/Markdown) — _v0.5.1_
 - [x] **Multi-root** index across machines — _v0.5.1_
-- [ ] Native window + installers via an optional Tauri shell
-- [ ] Plugin / hook system for custom analytics
-- [ ] Team mode (shared, read-only index over the LAN)
-- [ ] VS Code extension (open a session straight from the editor)
+- [x] **Session health scores** + **budget tracker** — _v0.5.2_
+- [x] **CLAUDE.md generator** + **session annotations** — _v0.5.2_
+- [x] **Efficiency dashboard**, **prompt library**, **git context** — _v0.5.2_
+- [x] **Keyboard navigation** + cheat sheet — _v0.5.2_
+- [ ] Tauri native window + installers
+- [ ] Webhook / notification system for budget alerts
+- [ ] Public session sharing (opt-in, encrypted link)
+- [ ] Plugin API for custom analytics modules
+- [ ] VS Code extension for deep-linking from the editor
 - [ ] Homebrew formula
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).
+
+### Built on ClaudeStudio
+
+ClaudeStudio is designed to be composable. Import the parser, query the MCP server,
+or build on top of the HTTP API. See [docs/API.md](docs/API.md) for the full reference.
 
 ---
 

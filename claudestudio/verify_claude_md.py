@@ -109,28 +109,43 @@ def gather_evidence(conn, project: str, now: _dt.datetime | None = None) -> dict
 
 
 def find_claude_md(project_path: str | None) -> str | None:
-    """Locate a CLAUDE.md at a project root (case-insensitive). None if absent."""
-    if not project_path or not os.path.isdir(project_path):
+    """Locate a CLAUDE.md at a project root (case-insensitive). None if absent.
+
+    Each candidate is resolved with ``realpath`` and confirmed to live *inside* the
+    (also resolved) project directory before it is returned — a defence against a
+    crafted project value tunnelling out via a symlink or ``..`` segment. Only a
+    fixed basename is ever joined, so this is belt-and-braces, but it keeps the
+    file we open provably contained.
+    """
+    if not project_path:
+        return None
+    base = os.path.realpath(project_path)
+    if not os.path.isdir(base):
         return None
     for name in ("CLAUDE.md", "claude.md", "Claude.md"):
-        p = os.path.join(project_path, name)
-        if os.path.isfile(p):
-            return p
+        cand = os.path.realpath(os.path.join(base, name))
+        try:
+            contained = os.path.commonpath([base, cand]) == base
+        except ValueError:
+            contained = False
+        if contained and os.path.isfile(cand):
+            return cand
     return None
 
 
 def verify(conn, project: str, now: _dt.datetime | None = None) -> dict:
     """Verify a project's CLAUDE.md. ``project`` is a path or short name.
 
-    Resolves the project's path from the index, reads its CLAUDE.md, extracts
-    claims and scores them. Gracefully reports when no CLAUDE.md is found or the
-    project is unknown.
+    The project path is resolved *from the index* (an already-indexed cwd), never
+    taken as a raw filesystem path from the caller — so an arbitrary path can't be
+    coaxed into a file read. Reads its CLAUDE.md, extracts claims and scores them;
+    gracefully reports when no CLAUDE.md is found or the project is unknown.
     """
     row = conn.execute(
         "SELECT project FROM sessions WHERE project=? OR project_name=? LIMIT 1",
         (str(project), str(project)),
     ).fetchone()
-    project_path = row["project"] if row else (project if os.path.isdir(project) else None)
+    project_path = row["project"] if row else None
     md_path = find_claude_md(project_path)
     if not md_path:
         return {"project": project, "claude_md_found": False, "claims": [],

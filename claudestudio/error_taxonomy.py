@@ -112,27 +112,29 @@ def _date_to_epoch(date: str | None) -> float | None:
         return None
 
 
-def _scope(project: str | None, since: str | None) -> tuple[str, list]:
-    where = ["1=1"]
-    args: list = []
-    if project:
-        where.append("(s.project = ? OR s.project_name = ?)")
-        args += [str(project), str(project)]
-    ep = _date_to_epoch(since)
-    if ep is not None:
-        where.append("s.last_epoch >= ?")
-        args.append(ep)
-    return " AND ".join(where), args
+# A single, constant WHERE snippet. Both filters are optional and applied with
+# named bind parameters: a NULL value short-circuits the clause to a no-op. This
+# keeps every query string a compile-time constant (no f-string interpolation of
+# any value), so there is no SQL-injection surface — the project/since values
+# only ever travel as bound parameters.
+_WHERE = (
+    "(:proj IS NULL OR s.project = :proj OR s.project_name = :proj) "
+    "AND (:since_ep IS NULL OR s.last_epoch >= :since_ep)"
+)
+
+
+def _filter(project: str | None, since: str | None) -> dict:
+    return {"proj": str(project) if project else None,
+            "since_ep": _date_to_epoch(since)}
 
 
 def by_type(conn, project: str | None = None, since: str | None = None) -> dict:
     """Error counts per taxonomy bucket, every bucket present (zero-filled)."""
-    clause, args = _scope(project, since)
     counts = dict.fromkeys(ERROR_TYPES, 0)
     for r in conn.execute(
-        f"SELECT e.error_type t, COUNT(*) n FROM session_errors e "
-        f"JOIN sessions s USING(session_id) WHERE {clause} GROUP BY e.error_type",
-        args,
+        "SELECT e.error_type t, COUNT(*) n FROM session_errors e "
+        "JOIN sessions s USING(session_id) WHERE " + _WHERE + " GROUP BY e.error_type",
+        _filter(project, since),
     ):
         if r["t"] in counts:
             counts[r["t"]] = int(r["n"] or 0)
@@ -142,26 +144,25 @@ def by_type(conn, project: str | None = None, since: str | None = None) -> dict:
 
 
 def by_project(conn, project: str | None = None, since: str | None = None) -> dict:
-    clause, args = _scope(project, since)
     rows = conn.execute(
-        f"SELECT COALESCE(s.project_name, s.project, '(unknown)') p, COUNT(*) n "
-        f"FROM session_errors e JOIN sessions s USING(session_id) WHERE {clause} "
-        f"GROUP BY p ORDER BY n DESC, p",
-        args,
+        "SELECT COALESCE(s.project_name, s.project, '(unknown)') p, COUNT(*) n "
+        "FROM session_errors e JOIN sessions s USING(session_id) WHERE " + _WHERE + " "
+        "GROUP BY p ORDER BY n DESC, p",
+        _filter(project, since),
     ).fetchall()
     return {r["p"]: int(r["n"] or 0) for r in rows}
 
 
 def worst_sessions(conn, project: str | None = None, since: str | None = None,
                    limit: int = 10) -> list[dict]:
-    clause, args = _scope(project, since)
+    params = {**_filter(project, since), "lim": max(1, int(limit))}
     rows = conn.execute(
-        f"SELECT e.session_id id, COALESCE(s.title,'') title, COUNT(*) count, "
-        f"       COALESCE(s.last_ts,'') last_ts "
-        f"FROM session_errors e JOIN sessions s USING(session_id) WHERE {clause} "
-        f"GROUP BY e.session_id ORDER BY count DESC, MAX(s.last_epoch) DESC, e.session_id "
-        f"LIMIT ?",
-        (*args, max(1, int(limit))),
+        "SELECT e.session_id id, COALESCE(s.title,'') title, COUNT(*) count, "
+        "       COALESCE(s.last_ts,'') last_ts "
+        "FROM session_errors e JOIN sessions s USING(session_id) WHERE " + _WHERE + " "
+        "GROUP BY e.session_id ORDER BY count DESC, MAX(s.last_epoch) DESC, e.session_id "
+        "LIMIT :lim",
+        params,
     ).fetchall()
     return [dict(r) for r in rows]
 

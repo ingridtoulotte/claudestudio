@@ -23,7 +23,7 @@ jobs:
     permissions:
       id-token: write           # OIDC token for Trusted Publishing — no API token stored
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
 

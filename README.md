@@ -15,6 +15,9 @@ Explore, search, replay, and understand every Claude Code session — all on you
 ![License](https://img.shields.io/badge/license-MIT-blue)
 [![Changelog](https://img.shields.io/badge/changelog-read-9a8cff)](CHANGELOG.md)
 [![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-9a8cff)](https://claude.ai/code)
+![Plugins](https://img.shields.io/badge/plugins-extensible-9a8cff)
+![Self-test](https://img.shields.io/badge/self--test-620%2B%20checks-5ec98a)
+![MCP Tools](https://img.shields.io/badge/MCP%20tools-20-9a8cff)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
@@ -60,8 +63,39 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - ✎ **Session annotations** — attach searchable personal notes to any session or message; they survive reindexing. *(new in v0.5.2)*
 - ⚡ **Efficiency dashboard** — output-per-dollar, tool-success rate, and a per-project efficiency ranking. *(new in v0.5.2)*
 - 📚 **Prompt library** — auto-extract your most reusable prompts, plus star/search your own. *(new in v0.5.2)*
+- 🏷 **Session tags & labels** — custom coloured labels for any session; filter by any combination. *(new in v0.6.1)*
+- 📖 **Smart session narratives** — one-paragraph story of every session (goals, approach, outcome, next steps). No model calls. *(new in v0.6.1)*
+- 🔥 **Per-file impact heatmap** — which files does Claude edit most? A 12-week visual matrix. *(new in v0.6.1)*
+- 📰 **Daily digest** — standup-ready summary of today's (or any day's) Claude Code sessions. *(new in v0.6.1)*
+- 🎨 **Theme system** — dark / light / system / high-contrast themes; keyboard shortcut `T`. *(new in v0.6.1)*
+- 📦 **Static share pack** — share any session as a self-contained `.html` file. No server, no upload. *(new in v0.6.1)*
+- 📊 **Benchmark** — week-over-week and month-over-month efficiency comparison with trend arrows. *(new in v0.6.1)*
+- 🔌 **Plugin API** — drop a `.py` into `~/.claudestudio/plugins/` to extend ClaudeStudio. *(new in v0.6.1)*
 
 ---
+
+## 🆕 What's new in v0.6.1
+
+The **Deep Intelligence & Community** release. Schema migrates in place to **v5**; self-test **495 → 623**; MCP **16 → 20 tools**. Still 100% local, zero dependencies, deterministic.
+
+<!-- TODO v0.6.1: docs/screenshots/tags_filter.png — session list filtered by tag -->
+<!-- TODO v0.6.1: docs/screenshots/narrative_card.png — session narrative panel -->
+<!-- TODO v0.6.1: docs/screenshots/file_heatmap.png — 12-week file heatmap SVG -->
+<!-- TODO v0.6.1: docs/screenshots/digest_terminal.png — terminal digest output -->
+<!-- TODO v0.6.1: docs/screenshots/theme_toggle.png — light/dark theme comparison -->
+<!-- TODO v0.6.1: docs/screenshots/share_pack.png — standalone share HTML in browser -->
+<!-- TODO v0.6.1: docs/screenshots/benchmark.png — benchmark with trend arrows -->
+<!-- TODO v0.6.1: docs/screenshots/plugin_api.png — example plugin output -->
+
+- **Session tags & labels** — a personal knowledge layer: create coloured tags (`bug-fix`, `architecture`, `ship-it`), apply them to any session, and filter by any combination. User state, survives reindexing (schema **v5**; `/api/tags`; MCP `list_tags`, `get_session_tags`; `claudestudio tag`).
+- **Smart session narratives** — a deterministic one-paragraph story of any session: goal, approach, outcome, files changed, errors, recovery, next steps, and a quality label — no model calls. Perfect for PR descriptions and stand-up notes (`/api/session/{id}/narrative`; MCP `get_session_narrative`; `claudestudio narrative`).
+- **Per-file impact heatmap** — which files does Claude touch most? A file × 12-week matrix as JSON and a pure-stdlib SVG (`/api/files/heatmap`, `/api/files/heatmap.svg`; MCP `get_file_heatmap`).
+- **Daily digest** — a standup-ready summary of any day's sessions with a pre-rendered Markdown block (`/api/digest`, `/api/digest.md`; `claudestudio digest [--yesterday|--date]`).
+- **Theme system** — dark / light / system / high-contrast, expressed as CSS custom-property overrides, persisted locally and to the index for cross-device consistency. Keyboard `T` cycles (`web/themes.js`, `/api/preferences`).
+- **Static share pack** — export a session as a single self-contained `.html` file that replays from itself: no server, no network, no upload (`/api/session/{id}/share.html`; `claudestudio share`).
+- **Benchmark** — week / month / quarter efficiency comparison (output-per-dollar, tool success, health) with trend arrows and a plain-English verdict (`/api/benchmark`; `claudestudio benchmark`).
+- **Plugin API foundations** — drop a `.py` in `~/.claudestudio/plugins/` to add HTTP routes, MCP tools, CLI commands, or post-index hooks. Isolated, localhost-only, additive ([`docs/PLUGINS.md`](docs/PLUGINS.md)).
+- **Enhanced `doctor`** — index freshness, schema version, plugin status, preferences, hottest file, a benchmark verdict, auto-fix hints, and exit codes (0 healthy / 1 warnings / 2 critical).
 
 ## 🆕 What's new in v0.6.0
 
@@ -108,6 +142,9 @@ The **workspace, completed.** Schema migrates in place to **v4**; self-test **39
 | `?` | Show all shortcuts |
 | `s` | Star/unstar session |
 | `e` | Export session |
+| `T` | Cycle themes (dark → light → system → high-contrast) |
+| `n` | Open narrative for current session |
+| `d` | Open daily digest |
 
 <details><summary>What's new in v0.5.1</summary>
 
@@ -327,7 +364,7 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 | Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
 | Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ✅ deterministic |
 | Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 16 tools      |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 20 tools      |
 | Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ✅               |
 | Inline file diffs in replay   | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
 | Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ✅               |
@@ -417,7 +454,12 @@ python -m claudestudio [command]
   demo           generate synthetic data & explore --count N --serve
   budget         track spend against a monthly/weekly ceiling
   generate-claude-md   write a CLAUDE.md from a project's history
-  --selftest     run the built-in correctness suite (495 checks, no deps)
+  digest         standup-ready daily summary       --yesterday --date YYYY-MM-DD --html
+  narrative      generate session narrative         <session_id> | --last
+  share          export session as shareable HTML   <session_id> [--out FILE] [--no-annotations]
+  benchmark      week/month/quarter efficiency report  --mode week|month|quarter --json
+  tag            manage session tags                --add NAME [--colour HEX] | --list
+  --selftest     run the built-in correctness suite (623 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
@@ -472,16 +514,23 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] **`claudestudio init`** onboarding wizard — _v0.6.0_
 - [x] **CHANGELOG draft generator** + **dev self-test dashboard** — _v0.6.0_
 - [x] **WCAG 2.1 AA** accessibility pass — _v0.6.0_
+- [x] Session tags & labels — custom coloured filtering layer — _v0.6.1_
+- [x] Smart session narratives (deterministic, no model calls) — _v0.6.1_
+- [x] Per-file impact heatmap (12-week SVG matrix) — _v0.6.1_
+- [x] Daily digest (standup-ready summary) — _v0.6.1_
+- [x] Theme system (dark/light/system/high-contrast) — _v0.6.1_
+- [x] Static share pack (self-contained HTML, no upload) — _v0.6.1_
+- [x] Benchmark (week/month/quarter efficiency trends) — _v0.6.1_
+- [x] Plugin API foundations (~/.claudestudio/plugins/) — _v0.6.1_
 - [ ] Tauri native window + signed installers (`.dmg`, `.msi`)
 - [ ] Homebrew formula (`brew install claudestudio`)
 - [ ] VS Code extension with session deep-link support
 - [ ] Webhook / push notification system (budget alerts, session completion)
 - [ ] Public session sharing (opt-in, locally encrypted link, no cloud backend)
 - [ ] i18n foundations (extractable string table)
-- [ ] Plugin API for custom analytics modules
 - [ ] Team/org mode (shared read-only index over local network)
 - [ ] AI-assisted session summarization (opt-in, explicit user action)
-- [ ] Obsidian plugin for linking sessions to notes
+- [ ] Obsidian plugin (via plugin API)
 - [ ] Raycast extension for quick session search
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).

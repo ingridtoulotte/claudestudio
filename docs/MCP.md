@@ -77,6 +77,35 @@ JSON document.
 | `generate_project_brief` | `project_id: str` | A full onboarding brief: sessions, spend, top files/tools, last activity, and an inferred CLAUDE.md profile. *(v0.5.2)* |
 | `get_cross_refs` | `limit?: int = 50` | Prompts that reference an earlier session ("as we did last time") with candidate target sessions. *(v0.6.0)* |
 | `find_sessions_by_github_ref` | `ref?: str`, `number?: int`, `repo?: str` | Sessions that discussed a GitHub issue/PR (`#123`, `owner/repo#456`). Read-only; no GitHub API calls. *(v0.6.0)* |
+| `list_tags` | _(none)_ | All user-defined session tags with their session counts. *(v0.6.1)* |
+| `get_session_tags` | `session_id: str` | The tags applied to a specific session (`id`, `name`, `colour`). *(v0.6.1)* |
+| `get_session_narrative` | `session_id: str` | A deterministic narrative of a session: goal, approach, outcome, files changed, errors, recovery, next steps, quality. No model calls. *(v0.6.1)* |
+| `get_file_heatmap` | `project_id?: str`, `since?: str`, `until?: str` | The top-10 hottest files with `heat_score`, `edit_count`, `session_count`. *(v0.6.1)* |
+
+### v0.6.1 tool examples
+
+**Schemas.** `list_tags` → `{"tags":[{id,name,colour,created_at,session_count}]}`.
+`get_session_tags` → `{"session_id","tags":[{id,name,colour,created_at}]}`.
+`get_session_narrative` → `{headline,goal,approach,outcome,files_changed,
+errors_encountered,recovery,next_steps,quality,word_count,session_id}`.
+`get_file_heatmap` → `{"files":[{path,edit_count,session_count,heat_score}],
+"total_files"}`.
+
+`get_session_narrative` — auto-draft a PR description from your last session:
+
+```jsonc
+{"jsonrpc":"2.0","id":7,"method":"tools/call",
+ "params":{"name":"get_session_narrative","arguments":{"session_id":"<id>"}}}
+// ← {"headline":"✅ Successful: Refactor auth module…","goal":"…","outcome":"…", …}
+```
+
+`get_file_heatmap` — "which files am I touching most this week?":
+
+```jsonc
+{"jsonrpc":"2.0","id":8,"method":"tools/call",
+ "params":{"name":"get_file_heatmap","arguments":{"since":"2026-06-20"}}}
+// ← {"files":[{"path":"src/auth.py","edit_count":28,"heat_score":0.94}, …]}
+```
 
 ### v0.5.2 tool examples
 
@@ -156,7 +185,7 @@ Standard MCP / JSON-RPC 2.0. The server implements `initialize`, `tools/list`,
 {"jsonrpc":"2.0","id":1,"result":{
   "protocolVersion":"2024-11-05",
   "capabilities":{"tools":{"listChanged":false}},
-  "serverInfo":{"name":"claudestudio","version":"0.5.1"}}}
+  "serverInfo":{"name":"claudestudio","version":"0.6.1"}}}
 
 // → call a tool
 {"jsonrpc":"2.0","id":2,"method":"tools/call",

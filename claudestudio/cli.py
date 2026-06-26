@@ -415,7 +415,11 @@ def cmd_highlights(args):
 
 
 def cmd_doctor(args):
+    """Diagnose environment & index health. Exit 0 healthy, 1 warnings, 2 critical."""
     print(BANNER)
+    warnings: list[str] = []   # (message, fix-hint) printed inline; counted for exit code
+    criticals: list[str] = []
+
     roots = _split_roots(args.root) or [_parser.default_projects_root()]
     total_files = 0
     for r in roots:
@@ -433,31 +437,103 @@ def cmd_doctor(args):
         print("  sqlite FTS5   : available ✓")
     except sqlite3.OperationalError:
         print("  sqlite FTS5   : MISSING ✗ (search will be degraded)")
+        criticals.append("sqlite FTS5 missing — install a Python with FTS5 support")
     print(f"  python        : {sys.version.split()[0]}")
     from . import pricing
     age = pricing.price_table_age_days()
-    flag = "STALE ⚠" if pricing.is_price_table_stale() else "ok ✓"
-    print(f"  pricing data  : {flag} (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
+    if pricing.is_price_table_stale():
+        print(f"  pricing data  : STALE ⚠ (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
+        warnings.append("pricing table is stale — upgrade ClaudeStudio for current prices")
+    else:
+        print(f"  pricing data  : ok ✓ (updated {pricing.PRICE_TABLE_DATE}, {age}d ago)")
     from . import hook, mcp
     print(f"  mcp server    : {len(mcp.TOOLS)} tools (run `claudestudio mcp`)")
     hst = hook.hook_status(db_path=args.db)
     if hst["installed"]:
         print(f"  hook          : installed ✓ ({hook.HOOK_EVENT} → {hook.HOOK_COMMAND})")
     else:
-        print("  hook          : not installed ⚠ — run `claudestudio hook install` "
-              "to auto-reindex")
+        print("  hook          : not installed ⚠")
+        warnings.append("hook not installed — run `claudestudio hook install` to auto-reindex")
+
+    # plugin status (v0.6.1)
+    from . import plugin_loader
+    plugins = plugin_loader.load_plugins()
+    ok_p = [p for p in plugins if p.ok]
+    bad_p = [p for p in plugins if not p.ok]
+    if not plugins:
+        print("  plugins       : none (drop .py files in ~/.claudestudio/plugins/)")
+    else:
+        print(f"  plugins       : {len(ok_p)} loaded, {len(bad_p)} failed")
+        for p in ok_p:
+            print(f"                  ✓ {p.name}  ({', '.join(p.hooks) or 'no hooks'})")
+        for p in bad_p:
+            print(f"                  ✗ {p.name}  — {p.error}")
+            warnings.append(f"plugin {p.name!r} failed to load — fix or remove "
+                            f"~/.claudestudio/plugins/{p.name}.py")
+
     if os.path.exists(args.db):
         conn = index.connect(args.db)
-        s = index.session_summary(conn)
-        print(f"  schema ver    : {index.stored_schema_version(conn)} "
-              f"(current {index.SCHEMA_VERSION})")
-        print(f"  indexed       : {s['sessions']:,} sessions, "
-              f"{s['messages']:,} messages")
-        rc = index.root_counts(conn)
-        if len(rc) > 1:
-            for r in rc:
-                print(f"  indexed root  : {r['root']}  ({r['sessions']} sessions)")
-        conn.close()
+        try:
+            s = index.session_summary(conn)
+            stored = index.stored_schema_version(conn)
+            flag = "✓" if stored == index.SCHEMA_VERSION else "⚠"
+            print(f"  schema ver    : {stored} (current {index.SCHEMA_VERSION}) {flag}")
+            print(f"  indexed       : {s['sessions']:,} sessions, "
+                  f"{s['messages']:,} messages")
+            rc = index.root_counts(conn)
+            if len(rc) > 1:
+                for r in rc:
+                    print(f"  indexed root  : {r['root']}  ({r['sessions']} sessions)")
+
+            # index freshness (v0.6.1)
+            ind = s.get("indexed_at")
+            if ind:
+                hrs = max(0.0, (time.time() - ind) / 3600.0)
+                fresh = "✓" if hrs <= 24 else "⚠"
+                print(f"  index fresh   : {hrs:.1f}h old {fresh}")
+                if hrs > 24 and not hst["installed"]:
+                    warnings.append("index >24h old and no hook — run `claudestudio index` "
+                                    "or install the hook")
+
+            # preferences (v0.6.1)
+            theme = index.get_preference(conn, "theme", "dark")
+            budget = conn.execute(
+                "SELECT period, ceiling_usd FROM budgets ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            bud = (f"${budget['ceiling_usd']:.0f}/{budget['period']}"
+                   if budget else "none")
+            print(f"  preferences   : theme={theme}, budget={bud}")
+
+            # hottest file (v0.6.1)
+            from . import file_heatmap
+            top = file_heatmap.top_files(conn, limit=1)["files"]
+            if top:
+                f = top[0]
+                print(f"  hottest file  : {f['path']} ({f['edit_count']} edits)")
+
+            # benchmark quick verdict (v0.6.1)
+            from . import benchmark
+            verdict = benchmark.compute_benchmark(conn, "week")["verdict"]
+            print(f"  benchmark     : {verdict}")
+        finally:
+            conn.close()
+    else:
+        warnings.append("no index yet — run `claudestudio index` (or `claudestudio demo`)")
+
+    # summary + exit code
+    print()
+    if criticals:
+        for m in criticals:
+            print(f"  ❌ {m}")
+    for m in warnings:
+        print(f"  ⚠  {m}")
+    if criticals:
+        print("\n  doctor: critical issues found.")
+        return 2
+    if warnings:
+        print(f"\n  doctor: {len(warnings)} warning(s) — see fixes above.")
+        return 1
+    print("  doctor: all healthy ✓")
     return 0
 
 
@@ -840,6 +916,154 @@ def cmd_feed(args):
     return 0
 
 
+def _last_session_id(conn) -> str | None:
+    row = conn.execute(
+        "SELECT session_id FROM sessions ORDER BY last_epoch DESC, session_id ASC LIMIT 1"
+    ).fetchone()
+    return row["session_id"] if row else None
+
+
+def cmd_tag(args):
+    """Manage session tags — the freeform organisational layer."""
+    from .tags import TagManager
+    conn = index.connect(args.db)
+    try:
+        if args.add:
+            try:
+                tag = TagManager.create_tag(conn, args.add, args.colour)
+            except ValueError as exc:
+                print(f"  ✗ {exc}", file=sys.stderr)
+                return 1
+            print(f"  ✓ tag “{tag['name']}”  {tag['colour']}  "
+                  f"({tag['session_count']} sessions)")
+            return 0
+        tags = TagManager.list_tags(conn)
+        print(BANNER)
+        if not tags:
+            print("  No tags yet. Add one:  claudestudio tag --add \"bug-fix\"")
+            return 0
+        print(f"  {len(tags)} tag(s):\n")
+        for t in tags:
+            print(f"    {t['colour']}  {t['name']:<24} {t['session_count']:>4} sessions")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_narrative(args):
+    """Print a deterministic, human-readable narrative of a session."""
+    from . import narrative
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        n = narrative.narrative_for_session(conn, sid)
+    finally:
+        conn.close()
+    if n.get("error"):
+        print(f"  ✗ {n['error']}: {sid}", file=sys.stderr)
+        return 1
+    print(f"\n  {n['headline']}\n")
+    print(f"  Goal      {n['goal'] or '—'}")
+    print(f"  Approach  {n['approach']}")
+    print(f"  Outcome   {n['outcome']}")
+    if n.get("files_changed"):
+        print(f"  Files     {', '.join(n['files_changed'][:8])}")
+    if n.get("recovery"):
+        print(f"  Recovery  {n['recovery']}")
+    if n.get("next_steps"):
+        print(f"  Next      {n['next_steps']}")
+    print(f"  Quality   {n['quality']}  ({n['word_count']} words)\n")
+    return 0
+
+
+def cmd_digest(args):
+    """Standup-ready summary of a day's Claude Code sessions."""
+    from . import digest
+    date = args.date
+    if args.yesterday:
+        date = (_dt.date.today() - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    conn = index.connect(args.db)
+    try:
+        if args.html:
+            html = digest.digest_html(conn, date=date, project_id=args.project)
+            dest = _safe_out_path(args.out, "claudestudio-digest.html")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(html)
+            print(f"  digest → {dest}")
+            return 0
+        d = digest.generate_digest(conn, date=date, project_id=args.project)
+    finally:
+        conn.close()
+    print(d["markdown"])
+    return 0
+
+
+def cmd_share(args):
+    """Export a session as a self-contained, offline-renderable HTML file."""
+    from . import share
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        html = share.build_share_pack(
+            conn, sid, include_annotations=not args.no_annotations)
+    finally:
+        conn.close()
+    if not html:
+        print(f"  ✗ no session: {sid}", file=sys.stderr)
+        return 1
+    if not args.out or args.out == "-":
+        sys.stdout.write(html)
+        return 0
+    dest = _safe_out_path(args.out, f"{sid[:12]}-share.html")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    print(f"  share → {dest}")
+    return 0
+
+
+def cmd_benchmark(args):
+    """Week/month/quarter efficiency comparison with trend arrows."""
+    from . import benchmark
+    conn = index.connect(args.db)
+    try:
+        b = benchmark.compute_benchmark(conn, args.mode)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(b, indent=2, default=str))
+        return 0
+    arrow = {"improving": "↑", "declining": "↓", "stable": "→"}[b["trend"]]
+    print(BANNER)
+    print(f"  {b['verdict']}\n")
+    cur, delta = b["current"], b["delta"]
+
+    def line(label, key, fmt="{:,}"):
+        c = fmt.format(cur[key]) if isinstance(cur[key], (int, float)) else cur[key]
+        d = delta[key]
+        a = "↑" if d > 0 else ("↓" if d < 0 else "→")
+        print(f"    {label:<20} {c:>14}   {a} {d:+.1f}%")
+
+    line("sessions", "sessions")
+    line("output tokens", "tokens_output")
+    line("cost (USD)", "cost_usd", "${:,.2f}")
+    line("output / dollar", "output_per_dollar", "{:,.0f}")
+    line("tool success", "tool_success_rate", "{:.0%}")
+    line("avg health", "avg_health_score", "{:.0f}")
+    line("files touched", "files_touched")
+    print(f"\n  trend: {arrow} {b['trend']}")
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -1021,6 +1245,66 @@ def build_parser():
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(func=cmd_demo)
+
+    # --- v0.6.1 subcommands ---
+    p = sub.add_parser(
+        "tag", help="manage session tags",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="example:\n  claudestudio tag --add \"bug-fix\" --colour \"#ff8a5b\"\n"
+               "  claudestudio tag --list")
+    _add_common(p)
+    p.add_argument("--add", metavar="NAME", help="create a tag")
+    p.add_argument("--colour", "--color", dest="colour", default=None,
+                   help="hex colour for --add (default #9a8cff)")
+    p.add_argument("--list", action="store_true", help="list all tags")
+    p.set_defaults(func=cmd_tag)
+
+    p = sub.add_parser(
+        "narrative", help="generate a session narrative",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="example:\n  claudestudio narrative 1a2b3c4d\n"
+               "  claudestudio narrative --last")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", help="session id to narrate")
+    p.add_argument("--last", action="store_true", help="most recently indexed session")
+    p.set_defaults(func=cmd_narrative)
+
+    p = sub.add_parser(
+        "digest", help="standup-ready daily summary",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="example:\n  claudestudio digest\n  claudestudio digest --yesterday\n"
+               "  claudestudio digest --date 2026-06-20 --html --out digest.html")
+    _add_common(p)
+    p.add_argument("--date", default=None, help="calendar date YYYY-MM-DD (default today)")
+    p.add_argument("--yesterday", action="store_true", help="yesterday's digest")
+    p.add_argument("--project", default=None, help="scope to one project")
+    p.add_argument("--html", action="store_true", help="export a full HTML page")
+    p.add_argument("--out", default=None, help="output file for --html")
+    p.set_defaults(func=cmd_digest)
+
+    p = sub.add_parser(
+        "share", help="export a session as shareable HTML",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="example:\n  claudestudio share 1a2b3c4d --out session.html\n"
+               "  claudestudio share --last")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", help="session id to share")
+    p.add_argument("--last", action="store_true", help="most recently indexed session")
+    p.add_argument("--out", default=None, help="output file (default: stdout)")
+    p.add_argument("--no-annotations", action="store_true",
+                   help="omit personal notes from the pack")
+    p.set_defaults(func=cmd_share)
+
+    p = sub.add_parser(
+        "benchmark", help="week/month/quarter efficiency report",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="example:\n  claudestudio benchmark\n"
+               "  claudestudio benchmark --mode month\n  claudestudio benchmark --json")
+    _add_common(p)
+    p.add_argument("--mode", choices=["week", "month", "quarter"], default="week",
+                   help="comparison period (default week)")
+    p.add_argument("--json", action="store_true", help="raw JSON output")
+    p.set_defaults(func=cmd_benchmark)
 
     return ap
 

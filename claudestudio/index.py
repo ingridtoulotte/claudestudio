@@ -43,7 +43,12 @@ from .parser import ParsedSession
 # the source on (re)index — derived data, not user state — so an old index simply
 # starts empty and fills in on the next reindex. The migration only creates the
 # table (schema script, IF NOT EXISTS) and bumps the version; no data is lost.
-SCHEMA_VERSION = 4
+# v5 (v0.6.1): user-owned session tagging system. Two new tables — `available_tags`
+# (the palette of labels) and `session_tags` (which session carries which label) —
+# plus a `preferences` key/value table for cross-device UI state (theme, etc.).
+# All three are user state: created by the schema script (IF NOT EXISTS) and never
+# wiped by reindexing, so an old index opens cleanly and simply starts with no tags.
+SCHEMA_VERSION = 5
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -228,6 +233,31 @@ CREATE TABLE IF NOT EXISTS session_github_refs (
 CREATE INDEX IF NOT EXISTS idx_ghrefs_session ON session_github_refs(session_id);
 CREATE INDEX IF NOT EXISTS idx_ghrefs_number  ON session_github_refs(number);
 CREATE INDEX IF NOT EXISTS idx_ghrefs_repo    ON session_github_refs(owner, repo);
+
+-- v5 (v0.6.1): user-defined session tags. The palette of available labels and
+-- the per-session applications live in their own tables — user state, never
+-- wiped by reindexing (like favorites/notes). Tag names are normalised lowercase.
+CREATE TABLE IF NOT EXISTS available_tags (
+    id         TEXT PRIMARY KEY,
+    name       TEXT UNIQUE,
+    colour     TEXT,
+    created_at REAL
+);
+CREATE TABLE IF NOT EXISTS session_tags (
+    session_id TEXT,
+    tag_id     TEXT,
+    created_at REAL,
+    PRIMARY KEY (session_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag_id);
+
+-- v5 (v0.6.1): cross-device UI preferences (theme, etc.). A tiny key/value store;
+-- user state, survives reindexing. The frontend persists locally too, but a write
+-- here keeps the choice consistent across machines sharing one synced index.
+CREATE TABLE IF NOT EXISTS preferences (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -297,6 +327,11 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     # v4: session_github_refs is created by the schema script (IF NOT EXISTS) and
     # populated lazily on the next reindex (it's derived data, never user state),
     # so there is nothing to migrate beyond recording the version below.
+    # v5 (v0.6.1): user-owned session tagging system. `available_tags`,
+    # `session_tags` and `preferences` are created by the schema script
+    # (IF NOT EXISTS) and hold user state only — an old v4 index gains the empty
+    # tables here and keeps every session, favorite, note and annotation intact.
+    # Nothing to copy or backfill, so recording the version below is the migration.
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -897,3 +932,32 @@ def search_github_refs(conn, *, number=None, repo: str = "", owner: str = "",
         (*args, max(1, int(limit))),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# preferences  (cross-device UI state — user-owned, survives reindexing, v5)
+# ---------------------------------------------------------------------------
+
+def get_preference(conn, key: str, default: str | None = None) -> str | None:
+    """Read one preference value, or `default` when unset. Never raises."""
+    row = conn.execute(
+        "SELECT value FROM preferences WHERE key=?", (str(key),)
+    ).fetchone()
+    return row["value"] if row else default
+
+
+def set_preference(conn, key: str, value: str) -> dict:
+    """Upsert one preference key/value pair. Returns the stored row."""
+    conn.execute(
+        "INSERT OR REPLACE INTO preferences(key,value) VALUES(?,?)",
+        (str(key), str(value)),
+    )
+    conn.commit()
+    return {"key": str(key), "value": str(value)}
+
+
+def all_preferences(conn) -> dict:
+    """Every stored preference as a flat dict (empty when none set)."""
+    return {r["key"]: r["value"] for r in conn.execute(
+        "SELECT key, value FROM preferences"
+    )}

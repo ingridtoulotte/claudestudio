@@ -209,6 +209,36 @@ def _t_find_sessions_by_github_ref(conn, args: dict) -> dict:
     return api.github_refs_search(conn, params)
 
 
+# --- v0.6.1 tools (#17–#20) ------------------------------------------------
+
+def _t_list_tags(conn, args: dict) -> dict:
+    """All user-defined session tags with their live session counts."""
+    from .tags import TagManager
+    return {"tags": TagManager.list_tags(conn)}
+
+
+def _t_get_session_tags(conn, args: dict) -> dict:
+    """The tags applied to one session."""
+    from .tags import TagManager
+    sid = str(args.get("session_id") or "")
+    return {"session_id": sid, "tags": TagManager.get_session_tags(conn, sid)}
+
+
+def _t_get_session_narrative(conn, args: dict) -> dict:
+    """A deterministic one-paragraph narrative of a session (no model calls)."""
+    from . import narrative
+    sid = str(args.get("session_id") or "")
+    return narrative.narrative_for_session(conn, sid)
+
+
+def _t_get_file_heatmap(conn, args: dict) -> dict:
+    """The top-10 hottest files with heat_score, edit_count and session_count."""
+    from . import file_heatmap
+    return file_heatmap.top_files(
+        conn, limit=10, project_id=args.get("project_id"),
+        since=args.get("since"), until=args.get("until"))
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -388,6 +418,45 @@ TOOLS = [
             },
         },
         "handler": _t_find_sessions_by_github_ref,
+    },
+    {
+        "name": "list_tags",
+        "description": "List all user-defined session tags with their session counts. Tags are the user's freeform organizational labels (bug-fix, architecture, ship-it, …).",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_list_tags,
+    },
+    {
+        "name": "get_session_tags",
+        "description": "Return the tags applied to a specific session (id, name, colour). Use to recall how the user categorised a session.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_get_session_tags,
+    },
+    {
+        "name": "get_session_narrative",
+        "description": "Generate a deterministic, human-readable narrative of a session: goal, approach, outcome, files changed, errors, recovery, next steps and a quality label. No model calls. Great for auto-writing a PR description or stand-up note from a session.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_get_session_narrative,
+    },
+    {
+        "name": "get_file_heatmap",
+        "description": "The top-10 hottest files across your sessions with heat_score, edit_count and session_count. Answers 'which files am I touching most in this project this week?'. Optional project_id / since / until (YYYY-MM-DD) filters.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "optional project filter"},
+                "since": {"type": "string", "description": "optional YYYY-MM-DD lower bound"},
+                "until": {"type": "string", "description": "optional YYYY-MM-DD upper bound"},
+            },
+        },
+        "handler": _t_get_file_heatmap,
     },
 ]
 

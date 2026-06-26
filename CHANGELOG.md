@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-26
+
+The **"Insight Engine"** release. v0.6.2 turns ClaudeStudio from a recorder of
+your history into an active intelligence layer: context-rich session resume
+briefs, two-session comparison, an error taxonomy with a recurring-error
+dashboard, prompt-to-outcome tracing, local/LAN webhook notifications, CLAUDE.md
+verification against real history, and budget forecasting. Still 100% local,
+zero runtime dependencies, deterministic — the self-test grows 623 → 729 checks,
+the MCP server 20 → 26 tools, and the schema migrates in place to v6. The
+`CODE_OF_CONDUCT.md` file is untouched.
+
+### Added
+- **Session resume briefs** (`resume.py`, `/api/session/{id}/resume`, MCP tool #21
+  `generate_resume_brief`, CLI `resume [--last] [--copy] [--out]`, keyboard `R`)
+- **Two-session comparison** (`compare.py`, upgraded `/api/compare`, MCP tool #22
+  `compare_sessions`, CLI `compare A B [--json]`, keyboard `C`)
+- **Error taxonomy & recurring-error tracker** (`error_taxonomy.py`, schema v6
+  `session_errors` table, `/api/errors/taxonomy`, `/api/errors/trend`,
+  `/api/errors/sessions`, MCP tools #23 `get_error_taxonomy` & #25
+  `search_by_error_type`, Errors card in Analytics)
+- **Prompt-to-outcome tracing** (`outcome_trace.py`,
+  `/api/session/{id}/message/{idx}/trace`, Trace panel, keyboard `X`)
+- **Local/LAN webhooks** (`webhooks.py`, `/api/webhooks` GET/POST/DELETE, CLI
+  `webhook --add/--remove/--list`, RFC-1918 + loopback enforcement)
+- **CLAUDE.md verification** (`verify_claude_md.py`,
+  `/api/project/{id}/verify-claude-md`, MCP tool #24 `verify_claude_md`, CLI
+  `verify-claude-md [--project] [--json]`)
+- **Budget forecasting** (`budget.forecast()`, `/api/budget/forecast`, MCP tool
+  #26 `get_budget_forecast`, Forecast card in Efficiency)
+- **`claudestudio open`** — open a session/search in the browser, starting the
+  server if needed (`open [--last] [--starred] [--query] [--port]`)
+- Enhanced `doctor`: webhook count, resume/compare readiness, 7-day error rate,
+  and a one-line "top recommendation"
+
+### Changed
+- MCP server grows 20 → 26 tools
+- Self-test grows 623 → 729 assertions
+- Schema migrates v5 → v6 (in-place; new derived `session_errors` table)
+- `/api/compare` upgraded from a bare `{a, b}` pair to a full structured diff
+- README rewritten for the Insight Engine release (new highlights, comparison
+  table column, CLI/keyboard tables, FAQ entries, ecosystem positioning)
+- CLI: 5 new subcommands (`resume`, `open`, `compare`, `verify-claude-md`, `webhook`)
+- Keyboard shortcuts: `R` (resume), `C` (compare), `X` (trace)
+
+### Migrations
+- Schema v5 → v6: adds the derived `session_errors` table (classified tool
+  errors), rebuilt on every reindex. No user data is touched; an old index opens
+  cleanly and backfills on the next reindex. A v0.6.1 build opening a v6 index
+  fails loudly with a clear version-mismatch message.
+
+### Security
+- Webhook target URLs are restricted to loopback / RFC-1918 hosts at both
+  configuration and send time, so the feature can never exfiltrate data off the
+  local network. No new outbound calls exist anywhere else in the codebase.
+
 ## [0.6.1] - 2026-06-26
 
 The "Deep Intelligence & Community" release. v0.6.1 adds a personal knowledge

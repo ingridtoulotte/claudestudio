@@ -127,6 +127,15 @@ const API = {
   patternDebugLoops: () => API.get('/api/patterns/debug-loops'),
   patternMomentum: () => API.get('/api/patterns/momentum'),
   crossRefs: () => API.get('/api/cross-refs'),
+  // v0.6.2 — Insight Engine
+  resume: (id) => API.get('/api/session/' + encodeURIComponent(id) + '/resume'),
+  compareFull: (a, b) => API.get('/api/compare?' + new URLSearchParams({ a, b })),
+  trace: (id, idx) => API.get('/api/session/' + encodeURIComponent(id) + '/message/' + encodeURIComponent(idx) + '/trace'),
+  errorsTaxonomy: () => API.get('/api/errors/taxonomy'),
+  budgetForecast: () => API.get('/api/budget/forecast'),
+  webhooks: () => API.get('/api/webhooks'),
+  addWebhook: (b) => API.post('/api/webhooks', b),
+  delWebhook: (id) => fetch('/api/webhooks/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
 };
 
 // trigger a browser download from a server endpoint that sets Content-Disposition
@@ -2078,3 +2087,175 @@ document.addEventListener('keydown', (e) => {
   startLiveUpdates();
   checkBudget();
 })();
+
+// ===========================================================================
+// v0.6.2 — Insight Engine UI: resume (R), compare (C), trace (X) + Errors and
+// Forecast cards. Self-contained: overlays/cards built with the shared `el`
+// helper, wired to the keyboard via cs:action intents from keyboard.js.
+// ===========================================================================
+
+// Clipboard copy with a textarea fallback for non-secure contexts / older browsers.
+function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+  } catch (e) { /* fall through to the textarea trick */ }
+  return new Promise((resolve) => {
+    try {
+      const ta = el('textarea', { class: 'cs-copy-fallback' });
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    } catch (e) { /* ignore */ }
+    resolve();
+  });
+}
+
+// R — copy a ready-to-paste resume brief for the current session to the clipboard.
+async function resumeCurrentSession() {
+  if (!CURRENT_SESSION) { toast('Open a session first', 'warn'); return; }
+  try {
+    const data = await API.resume(CURRENT_SESSION);
+    if (data.error) { toast(data.error, 'warn'); return; }
+    await copyText(data.brief);
+    toast('Copied resume brief to clipboard');
+  } catch (e) { toast('Could not build resume brief', 'warn'); }
+}
+
+// C — open a session-picker, then render the two-session comparison panel.
+async function openCompareModal(currentId) {
+  const id = currentId || CURRENT_SESSION;
+  if (!id) { toast('Open a session first', 'warn'); return; }
+  const overlay = el('div', { class: 'cs-overlay', onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+  const modal = el('div', { class: 'cs-modal cs-compare-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Compare sessions' });
+  modal.appendChild(el('div', { class: 'cs-modal-head' }, [
+    el('h3', { text: 'Compare with…' }),
+    el('button', { class: 'cs-modal-x', 'aria-label': 'Close', text: '×', onclick: () => overlay.remove() }),
+  ]));
+  const body = el('div', { class: 'cs-modal-body' });
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  try {
+    const res = await API.sessions({ limit: 20, sort: 'recent', archived: 'all' });
+    (res.sessions || []).filter((s) => s.session_id !== id).forEach((s) => {
+      body.appendChild(el('button', { class: 'cs-pick', 'aria-label': 'Compare with ' + (s.title || s.session_id), onclick: () => renderCompareResult(body, id, s.session_id) }, [
+        el('span', { class: 'cs-pick-title', text: s.title || 'Untitled' }),
+        el('span', { class: 'cs-pick-meta', text: '$' + (s.cost_usd || 0).toFixed(4) }),
+      ]));
+    });
+    if (!body.children.length) body.appendChild(el('div', { class: 'empty', text: 'No other sessions to compare.' }));
+  } catch (e) { body.appendChild(el('div', { class: 'empty', text: 'Could not load sessions.' })); }
+}
+
+async function renderCompareResult(body, a, b) {
+  body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const d = await API.compareFull(a, b);
+    if (d.error) { body.innerHTML = ''; body.appendChild(el('div', { class: 'empty', text: d.error })); return; }
+    body.innerHTML = '';
+    body.appendChild(el('div', { class: 'cs-cmp-verdict', text: d.verdict }));
+    const row = (label, val) => el('div', { class: 'cs-cmp-row' }, [el('span', { text: label }), el('strong', { text: val })]);
+    body.appendChild(row('Cost Δ', '$' + d.cost_delta_usd.toFixed(4)));
+    body.appendChild(row('Tokens Δ', (d.token_delta > 0 ? '+' : '') + d.token_delta.toLocaleString()));
+    body.appendChild(row('Health Δ', (d.health_delta > 0 ? '+' : '') + d.health_delta));
+    if (d.shared_files && d.shared_files.length) body.appendChild(row('Shared files', d.shared_files.slice(0, 6).join(', ')));
+  } catch (e) { body.innerHTML = ''; body.appendChild(el('div', { class: 'empty', text: 'Comparison failed.' })); }
+}
+
+// X — toggle a Trace panel: the causal tree (prompt → tools → files → errors → outcome).
+async function toggleTraceTab(messageIdx) {
+  const existing = document.getElementById('cs-trace');
+  if (existing) { existing.remove(); return; }
+  if (!CURRENT_SESSION) { toast('Open a session first', 'warn'); return; }
+  const panel = el('div', { id: 'cs-trace', class: 'cs-trace-tree', role: 'region', 'aria-label': 'Prompt trace' });
+  panel.appendChild(el('div', { class: 'loading', html: '<div class="spinner"></div>' }));
+  view().appendChild(panel);
+  try {
+    const t = await API.trace(CURRENT_SESSION, messageIdx || 0);
+    renderTraceTree(panel, t);
+  } catch (e) { panel.innerHTML = ''; panel.appendChild(el('div', { class: 'empty', text: 'No trace available.' })); }
+}
+
+function renderTraceTree(panel, t) {
+  panel.innerHTML = '';
+  panel.appendChild(el('div', { class: 'cs-trace-head' }, [
+    el('strong', { text: 'Trace' }),
+    el('button', { class: 'btn-ghost', 'aria-label': 'Close trace', text: 'Close', onclick: () => panel.remove() }),
+  ]));
+  if (t.empty || !t.prompt) { panel.appendChild(el('div', { class: 'empty', text: 'No prompt to trace.' })); return; }
+  panel.appendChild(el('div', { class: 'cs-trace-node prompt', text: '❯ ' + t.prompt.text }));
+  (t.tools || []).forEach((tc) => {
+    panel.appendChild(el('div', { class: 'cs-trace-node' + (tc.is_error ? ' err' : '') }, [
+      el('span', { class: 'cs-trace-tool', text: (tc.is_error ? '✗ ' : '✓ ') + tc.name }),
+      tc.files && tc.files.length ? el('span', { class: 'cs-trace-files', text: ' → ' + tc.files.join(', ') }) : el('span', {}),
+    ]));
+  });
+  (t.errors || []).forEach((er) => {
+    panel.appendChild(el('div', { class: 'cs-trace-node err', text: '⚠ ' + er.error_type + ': ' + er.text }));
+  });
+  if (t.outcome) panel.appendChild(el('div', { class: 'cs-trace-node outcome', text: '⇒ ' + t.outcome }));
+}
+
+// Errors card — top error types + worst sessions (mounted in the Analytics view).
+function errorsCard() {
+  const card = el('div', { class: 'card errors-card' });
+  card.appendChild(el('h3', { text: '⚠ Error taxonomy' }));
+  const slot = el('div', { class: 'errors-card-body' });
+  card.appendChild(slot);
+  API.errorsTaxonomy().then((d) => {
+    const entries = Object.entries(d.by_type || {}).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    if (!entries.length) { slot.appendChild(el('div', { class: 'empty', text: 'No errors recorded — clean runs.' })); return; }
+    entries.forEach(([type, n]) => {
+      slot.appendChild(el('div', { class: 'errors-row' }, [
+        el('span', { class: 'errors-type', text: type }),
+        el('span', { class: 'errors-count', text: String(n) }),
+      ]));
+    });
+  }).catch(() => slot.appendChild(el('div', { class: 'empty', text: 'Errors unavailable.' })));
+  return card;
+}
+
+// Forecast card — projected month spend + biggest driver (mounted in Efficiency).
+function forecastCard() {
+  const card = el('div', { class: 'card forecast-card' });
+  card.appendChild(el('h3', { text: '📈 Spend forecast' }));
+  const slot = el('div', { class: 'forecast-card-body' });
+  card.appendChild(slot);
+  API.budgetForecast().then((f) => {
+    slot.appendChild(el('div', { class: 'forecast-big', text: '$' + (f.projected_month_usd || 0).toFixed(2) }));
+    slot.appendChild(el('div', { class: 'forecast-sub', text: 'projected this month at current pace' }));
+    if (f.biggest_driver) slot.appendChild(el('div', { class: 'forecast-row', text: 'Biggest driver: ' + f.biggest_driver }));
+    if (f.opportunity && f.opportunity.project) slot.appendChild(el('div', { class: 'forecast-row', text: 'Watch: ' + f.opportunity.project + ' (low health, high cost)' }));
+    if (typeof f.sessions_until_limit === 'number' && f.sessions_until_limit >= 0) slot.appendChild(el('div', { class: 'forecast-row', text: f.sessions_until_limit + ' sessions until budget ceiling' }));
+  }).catch(() => slot.appendChild(el('div', { class: 'empty', text: 'Forecast unavailable.' })));
+  return card;
+}
+
+// Mount the new cards by extending the existing analytics / efficiency views
+// (function-declaration globals are reassignable in a classic script).
+if (typeof viewAnalytics === 'function') {
+  const _origViewAnalytics = viewAnalytics;
+  viewAnalytics = async function () {
+    await _origViewAnalytics.apply(this, arguments);
+    try { if (!document.querySelector('.errors-card')) view().appendChild(errorsCard()); } catch (e) { /* */ }
+  };
+}
+if (typeof viewEfficiency === 'function') {
+  const _origViewEfficiency = viewEfficiency;
+  viewEfficiency = async function () {
+    await _origViewEfficiency.apply(this, arguments);
+    try { if (!document.querySelector('.forecast-card')) view().appendChild(forecastCard()); } catch (e) { /* */ }
+  };
+}
+
+// Wire the keyboard intents (R/C/X) broadcast by keyboard.js.
+document.addEventListener('cs:action', (e) => {
+  const intent = e.detail && e.detail.intent;
+  if (intent === 'resume') resumeCurrentSession();
+  else if (intent === 'compare') openCompareModal(CURRENT_SESSION);
+  else if (intent === 'trace') toggleTraceTab(0);
+});

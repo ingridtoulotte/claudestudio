@@ -332,7 +332,10 @@ def set_state(conn, session_id: str, body: dict) -> dict:
 
 
 def compare(conn, a: str, b: str) -> dict:
-    return {"a": get_session_summary(conn, a), "b": get_session_summary(conn, b)}
+    """Structured two-session diff (cost/token/health deltas, prompt & file diffs,
+    plain-English verdict). v0.6.2 upgraded this from a bare {a,b} pair."""
+    from . import compare as compare_mod
+    return compare_mod.compare_sessions(conn, a, b)
 
 
 def get_session_summary(conn, session_id: str) -> dict | None:
@@ -1608,3 +1611,78 @@ def session_share(conn, session_id: str, include_annotations: bool = True):
     from . import share
     html = share.build_share_pack(conn, session_id, include_annotations)
     return html or None
+
+
+# ===========================================================================
+# v0.6.2 — Insight Engine: resume, error taxonomy, outcome trace, webhooks,
+# CLAUDE.md verification, budget forecast
+# ===========================================================================
+
+def resume_brief(conn, session_id: str) -> dict:
+    """Context-rich handoff brief for one session (or {error:…} when missing)."""
+    from . import resume
+    return resume.build_brief(conn, session_id)
+
+
+def error_taxonomy_payload(conn, params: dict | None = None) -> dict:
+    """Error dashboard: counts by type/project, worst sessions, weekly trend."""
+    from . import error_taxonomy
+    p = params or {}
+    return error_taxonomy.taxonomy(conn, project=p.get("project"), since=p.get("since"))
+
+
+def error_trend_payload(conn, params: dict | None = None) -> dict:
+    """Weekly error rate for the last N weeks (default 12)."""
+    from . import error_taxonomy
+    weeks = _int_param((params or {}).get("weeks"), 12, lo=1, hi=104)
+    return {"trend": error_taxonomy.trend(conn, weeks=weeks)}
+
+
+def sessions_by_error_type(conn, error_type: str, limit=20) -> dict:
+    """Sessions containing errors of one taxonomy type, most recent first."""
+    from . import error_taxonomy
+    lim = _int_param(limit, 20, lo=1, hi=500)
+    return {"error_type": str(error_type),
+            "sessions": error_taxonomy.sessions_by_error_type(conn, error_type, lim)}
+
+
+def outcome_trace(conn, session_id: str, message_idx) -> dict:
+    """Prompt-to-outcome causal trace tree for one message in a session."""
+    from . import outcome_trace as trace_mod
+    idx = _int_param(message_idx, 0, lo=0, hi=10_000_000)
+    return trace_mod.trace(conn, session_id, idx)
+
+
+def verify_claude_md(conn, project: str) -> dict:
+    """Score a project's CLAUDE.md claims against its actual session history."""
+    from . import verify_claude_md as vmod
+    return vmod.verify(conn, project)
+
+
+def budget_forecast(conn) -> dict:
+    """End-of-month spend projection, biggest driver, efficiency opportunity."""
+    from . import budget
+    return budget.forecast(conn)
+
+
+# --- webhooks (local/LAN only — RFC-1918 enforced in webhooks.py) -----------
+
+def webhooks_list(conn) -> dict:
+    from . import webhooks
+    return {"webhooks": webhooks.list_webhooks(conn)}
+
+
+def webhooks_add(conn, body: dict) -> dict:
+    """Register a webhook from ``{url, events?}``. 400 on a non-local URL."""
+    from . import webhooks
+    url = (body or {}).get("url") or ""
+    events = (body or {}).get("events")
+    try:
+        return webhooks.add_webhook(conn, url, events)
+    except ValueError as exc:
+        raise ApiError(400, str(exc)) from exc
+
+
+def webhooks_remove(conn, webhook_id: str) -> dict:
+    from . import webhooks
+    return webhooks.remove_webhook(conn, webhook_id)

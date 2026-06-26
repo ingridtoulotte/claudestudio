@@ -561,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 20, "mcp exposes 20 tools")
+        c.eq(len(tl["result"]["tools"]), 26, "mcp exposes 26 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -625,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.6.1", "package version bumped to 0.6.1")
-        c.eq(init["result"]["serverInfo"]["version"], "0.6.1", "mcp serverInfo is 0.6.1")
+        c.eq(claudestudio.__version__, "0.6.2", "package version bumped to 0.6.2")
+        c.eq(init["result"]["serverInfo"]["version"], "0.6.2", "mcp serverInfo is 0.6.2")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.6.1" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "20" in out, "cli info reports the 20 MCP tools")
+        c.ok("0.6.2" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "26" in out, "cli info reports the 26 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -1017,7 +1017,7 @@ def run() -> int:
         from . import patterns as patmod2
         from . import sync as syncmod
 
-        c.eq(index.SCHEMA_VERSION, 5, "schema version is 5 (session tags)")
+        c.eq(index.SCHEMA_VERSION, 6, "schema version is 6 (session errors)")
 
         # craft a session (real .jsonl → reindex) carrying GitHub refs + a
         # cross-session reference phrase + a scoreable prompt.
@@ -1618,6 +1618,230 @@ def run() -> int:
 
         vconn.close()
 
+    # =====================================================================
+    # v0.6.2 — Insight Engine: resume, compare, error taxonomy, outcome
+    # trace, webhooks, CLAUDE.md verify, budget forecast, open, MCP #21-26
+    # =====================================================================
+    from . import budget as budgetmod
+    from . import compare as comparemod
+    from . import error_taxonomy as etax
+    from . import mcp as mcpmod
+    from . import outcome_trace as otrace
+    from . import resume as resumemod
+    from . import verify_claude_md as vcmd
+    from . import webhooks as whooks
+
+    # pure classification — pin every taxonomy bucket on known strings
+    c.eq(etax.classify_error("Permission denied"), "permission_error", "etax: permission denied")
+    c.eq(etax.classify_error("error: EACCES"), "permission_error", "etax: EACCES")
+    c.eq(etax.classify_error("ENOENT: no such file or directory"), "file_not_found", "etax: ENOENT")
+    c.eq(etax.classify_error("could not find module x"), "file_not_found", "etax: cannot find")
+    c.eq(etax.classify_error("SyntaxError: invalid syntax"), "syntax_error", "etax: syntax error")
+    c.eq(etax.classify_error("IndentationError: unexpected indent"), "syntax_error", "etax: indentation")
+    c.eq(etax.classify_error("Operation timed out after 30s"), "timeout", "etax: timeout")
+    c.eq(etax.classify_error("deadline exceeded"), "timeout", "etax: deadline exceeded")
+    c.eq(etax.classify_error("AssertionError: expected 1 but got 2"), "assertion_failure", "etax: assertion")
+    c.eq(etax.classify_error("3 tests failed"), "assertion_failure", "etax: tests failed")
+    c.eq(etax.classify_error("connection refused"), "api_error", "etax: connection refused")
+    c.eq(etax.classify_error("rate limit exceeded (429)"), "api_error", "etax: rate limit")
+    c.eq(etax.classify_error(""), "unknown", "etax: empty -> unknown")
+    c.eq(etax.classify_error("a wholly novel message"), "unknown", "etax: novel -> unknown")
+    c.eq(len(etax.ERROR_TYPES), 7, "etax: seven taxonomy buckets")
+
+    with tempfile.TemporaryDirectory() as tmp62:
+        root62 = os.path.join(tmp62, "projects")
+        os.makedirs(root62)
+        kexp = fixtures.build_known(root62)               # 1 session, 1 error ('boom')
+        fixtures.build_corpus(root62, count=12)           # several projects/sessions
+        db62 = os.path.join(tmp62, "idx.db")
+        conn62 = index.connect(db62)
+        index.reindex(conn62, root62)
+        kps = parser.parse_file(kexp["path"])
+
+        # schema v6 table exists + populated at index time
+        n_err = conn62.execute("SELECT COUNT(*) n FROM session_errors").fetchone()["n"]
+        c.ok(n_err >= 1, "v6: session_errors populated at index time")
+        krow = conn62.execute(
+            "SELECT error_type FROM session_errors WHERE session_id=?",
+            (kexp["session_id"],)).fetchall()
+        c.eq(len(krow), 1, "v6: known fixture's single error indexed")
+        c.eq(krow[0]["error_type"], "unknown", "v6: 'boom' classified unknown")
+
+        exs = etax.extract_errors(kps)
+        c.eq(len(exs), 1, "etax: extract_errors returns the one error")
+        c.ok(exs[0]["tool_name"] == "Edit", "etax: error attributed to the Edit tool")
+
+        # taxonomy aggregation
+        tax = etax.taxonomy(conn62)
+        c.ok(set(tax["by_type"].keys()) == set(etax.ERROR_TYPES), "etax: taxonomy zero-fills every bucket")
+        c.eq(sum(tax["by_type"].values()), n_err, "etax: by_type totals match the row count")
+        c.ok(len(tax["worst_sessions"]) >= 1, "etax: worst_sessions listed")
+        c.eq(len(tax["trend"]), 12, "etax: a 12-week trend")
+        c.ok(isinstance(tax["by_project"], dict), "etax: by_project is a mapping")
+        tax_empty = etax.taxonomy(conn62, project="no-such-project")
+        c.eq(sum(tax_empty["by_type"].values()), 0, "etax: unknown project -> zeroed counts")
+        sbe = etax.sessions_by_error_type(conn62, "unknown")
+        c.ok(any(s["id"] == kexp["session_id"] for s in sbe), "etax: search-by-type finds the error session")
+        import datetime as _d62
+        fixed = _d62.datetime(2026, 6, 26, 12, 0, 0)
+        c.eq(etax.trend(conn62, weeks=4, now=fixed), etax.trend(conn62, weeks=4, now=fixed),
+             "etax: trend is deterministic for a fixed now")
+        er = etax.error_rate(conn62, days=7)
+        c.ok("per_session" in er and "change_pct" in er, "etax: error_rate carries rate + change")
+
+        # --- resume brief ---
+        rb = resumemod.build_brief(conn62, kexp["session_id"])
+        c.ok("brief" in rb and "CONTEXT FOR NEW SESSION" in rb["brief"], "resume: brief carries a CONTEXT block")
+        c.ok(kps.title in rb["brief"], "resume: brief contains the session title")
+        c.eq(rb["tool_count"], kps.tool_call_count, "resume: tool count matches the session")
+        c.ok(isinstance(rb["files_changed"], list), "resume: files_changed is a list")
+        c.ok(isinstance(rb["open_questions"], list), "resume: open_questions is a list")
+        c.ok(len(rb["last_errors"]) >= 1, "resume: recent errors captured")
+        c.ok(rb["branch"] is None and rb["sha"] is None, "resume: branch/sha None outside a git repo (graceful)")
+        miss = resumemod.build_brief(conn62, "nope")
+        c.eq(miss.get("error"), "not found", "resume: graceful on a missing session")
+        clean_id = None
+        for r in conn62.execute("SELECT session_id FROM sessions"):
+            if not conn62.execute("SELECT 1 FROM session_errors WHERE session_id=? LIMIT 1",
+                                  (r["session_id"],)).fetchone():
+                clean_id = r["session_id"]
+                break
+        if clean_id:
+            c.eq(resumemod.build_brief(conn62, clean_id)["last_errors"], [],
+                 "resume: no-error session -> empty last_errors (graceful)")
+        else:
+            c.ok(True, "resume: (corpus had no error-free session)")
+
+        # --- compare ---
+        ids = [r["session_id"] for r in conn62.execute(
+            "SELECT session_id FROM sessions ORDER BY last_epoch DESC LIMIT 4")]
+        cmpr = comparemod.compare_sessions(conn62, ids[0], ids[1])
+        c.ok(isinstance(cmpr.get("verdict"), str) and cmpr["verdict"], "compare: verdict string present")
+        c.ok(isinstance(cmpr["shared_files"], list), "compare: shared_files is a list")
+        c.ok("tool_success_a" in cmpr and "tool_success_b" in cmpr, "compare: tool-success rates present")
+        same = comparemod.compare_sessions(conn62, ids[0], ids[0])
+        c.eq(same["cost_delta_usd"], 0.0, "compare: same session -> zero cost delta")
+        c.eq(same["token_delta"], 0, "compare: same session -> zero token delta")
+        c.eq(same["health_delta"], 0, "compare: same session -> zero health delta")
+        c.eq(same["prompts_only_in_a"], [], "compare: same session -> no unique prompts")
+        fwd = comparemod.compare_sessions(conn62, ids[0], ids[1])
+        rev = comparemod.compare_sessions(conn62, ids[1], ids[0])
+        c.close(fwd["cost_delta_usd"], -rev["cost_delta_usd"], "compare: cost delta flips sign on swap")
+        c.eq(fwd["prompts_only_in_a"], rev["prompts_only_in_b"], "compare: prompt diff symmetric on swap")
+        c.ok(comparemod.compare_sessions(conn62, ids[0], "nope").get("error"),
+             "compare: graceful on a missing session")
+
+        # --- outcome trace ---
+        tr = otrace.trace(conn62, kexp["session_id"], 0)
+        c.ok(tr["prompt"] is not None, "trace: root is a user prompt")
+        c.ok(not tr["empty"], "trace: a non-empty session yields a trace")
+        c.eq(len(tr["tools"]), kps.tool_call_count, "trace: tool count matches the session")
+        c.ok(isinstance(tr["files"], list), "trace: files is a list")
+        c.ok(len(tr["errors"]) >= 1, "trace: surfaces the session's error")
+        tr_empty = otrace.trace(conn62, "nope", 0)
+        c.ok(tr_empty["empty"] and tr_empty["tools"] == [], "trace: missing session -> empty trace")
+
+        # --- webhooks (local/LAN enforcement) ---
+        c.ok(whooks.is_local_url("http://127.0.0.1:9000/h"), "webhooks: loopback accepted")
+        c.ok(whooks.is_local_url("http://192.168.1.10/h"), "webhooks: 192.168/16 accepted")
+        c.ok(whooks.is_local_url("http://10.1.2.3/h"), "webhooks: 10/8 accepted")
+        c.ok(whooks.is_local_url("http://172.16.0.5/h"), "webhooks: 172.16/12 accepted")
+        c.ok(whooks.is_local_url("http://localhost:8000/h"), "webhooks: localhost accepted")
+        c.ok(not whooks.is_local_url("http://8.8.8.8/h"), "webhooks: public IP rejected")
+        c.ok(not whooks.is_local_url("https://example.com/h"), "webhooks: public host rejected")
+        c.ok(not whooks.is_local_url("ftp://127.0.0.1/h"), "webhooks: non-http scheme rejected")
+        raised = False
+        try:
+            whooks.add_webhook(conn62, "http://evil.example.com/x")
+        except ValueError:
+            raised = True
+        c.ok(raised, "webhooks: add() rejects a non-local URL")
+        hk = whooks.add_webhook(conn62, "http://127.0.0.1:9", events="session_indexed")
+        c.ok(hk["id"] and hk["events"] == ["session_indexed"], "webhooks: add stores id + events")
+        c.eq(len(whooks.list_webhooks(conn62)), 1, "webhooks: list returns the stored hook")
+        pl = whooks.build_payload("session_indexed", {"x": 1})
+        c.ok(pl["source"] == "claudestudio" and pl["event"] == "session_indexed" and pl["data"] == {"x": 1},
+             "webhooks: payload has source/event/data")
+        disp = whooks.dispatch(conn62, "session_indexed", {"x": 1})
+        c.ok(disp and disp[0]["ok"] is False, "webhooks: unreachable endpoint handled gracefully")
+        c.ok(whooks.remove_webhook(conn62, hk["id"])["removed"]
+             and len(whooks.list_webhooks(conn62)) == 0, "webhooks: remove deletes the hook")
+
+        # --- CLAUDE.md verification (pure scoring) ---
+        claims = vcmd.extract_claims(
+            "- Always run tests with pytest\n- Use ruff for linting\n# heading\nplain note")
+        c.eq(len(claims), 2, "verify: extracts the pytest + ruff claims, skips heading/plain")
+        scored = vcmd.verify_claims(claims, {"recent": {"pytest"}, "old": {"ruff"}})
+        c.eq(scored[0]["status"], "verified", "verify: pytest verified from recent evidence")
+        c.eq(scored[1]["status"], "stale", "verify: ruff stale from old-only evidence")
+        none_scored = vcmd.verify_claims(claims, {"recent": set(), "old": set()})
+        c.ok(all(s["status"] == "unverifiable" for s in none_scored), "verify: unverifiable on empty history")
+        c.eq(vcmd.claim_signal("run pytest and mypy"), "pytest", "verify: claim_signal picks the first signal")
+        vres = vcmd.verify(conn62, "no-such-project")
+        c.ok(vres["claude_md_found"] is False and vres["overall_score"] == 0.0,
+             "verify: graceful when no CLAUDE.md exists")
+
+        # --- budget forecast ---
+        fc = budgetmod.forecast(conn62)
+        c.ok(fc["projected_month_usd"] >= 0, "forecast: non-negative projection")
+        c.ok(isinstance(fc["biggest_driver"], str) and fc["biggest_driver"], "forecast: biggest_driver is a project name")
+        c.ok("opportunity" in fc and "project" in fc["opportunity"], "forecast: opportunity present")
+        c.eq(fc["window_days"], 30, "forecast: 30-day window")
+        c.eq(fc["sessions_until_limit"], -1, "forecast: no budget -> sessions_until_limit -1")
+        with tempfile.TemporaryDirectory() as etmp:
+            econn = index.connect(os.path.join(etmp, "e.db"))
+            efc = budgetmod.forecast(econn)
+            c.eq(efc["projected_month_usd"], 0.0, "forecast: empty history projects 0")
+            c.eq(efc["biggest_driver"], "", "forecast: empty history has no driver")
+            econn.close()
+
+        # --- cli `open` URL resolution ---
+        ourl = cli.resolve_open_url(conn62, session_id=ids[0], port=9000)
+        c.ok(ourl.endswith("/session/" + ids[0]) and "9000" in ourl, "open: session URL built")
+        ourl_q = cli.resolve_open_url(conn62, query="parser bug", port=8787)
+        c.ok("/?q=" in ourl_q and "parser" in ourl_q, "open: query URL pre-fills search")
+        c.ok("/session/" in cli.resolve_open_url(conn62, last=True), "open: --last resolves a session")
+        with tempfile.TemporaryDirectory() as otmp:
+            oconn = index.connect(os.path.join(otmp, "o.db"))
+            c.ok(cli.resolve_open_url(oconn, last=True) is None, "open: graceful when no sessions exist")
+            oconn.close()
+
+        # --- doctor recommendation (pure) ---
+        c.ok("error rate rose" in cli._doctor_recommendation(
+            hooks=[], hook_installed=True, error_rate={"change_pct": 50, "errors": 3},
+            stale_pricing=False, n_sessions=10), "doctor: rec flags a rising error rate")
+        c.ok("index" in cli._doctor_recommendation(
+            hooks=[], hook_installed=True, error_rate={"change_pct": 0, "errors": 0},
+            stale_pricing=False, n_sessions=0).lower(), "doctor: rec asks to index an empty corpus")
+        c.ok("hook" in cli._doctor_recommendation(
+            hooks=[], hook_installed=False, error_rate={"change_pct": 0, "errors": 0},
+            stale_pricing=False, n_sessions=5).lower(), "doctor: rec suggests installing the hook")
+
+        # --- MCP tools #21-26 ---
+        c.eq(len(mcpmod.TOOLS), 26, "mcp: exactly 26 tools")
+        new_names = {"generate_resume_brief", "compare_sessions", "get_error_taxonomy",
+                     "verify_claude_md", "search_by_error_type", "get_budget_forecast"}
+        c.ok(new_names <= {t["name"] for t in mcpmod.TOOLS}, "mcp: the 6 new v0.6.2 tools registered")
+
+        def _mcp62(name, arguments):
+            r = mcpmod.call_tool(db62, name, arguments)
+            return json.loads(r["content"][0]["text"]), r["isError"]
+
+        rbrief, e1 = _mcp62("generate_resume_brief", {"session_id": kexp["session_id"]})
+        c.ok(not e1 and "brief" in rbrief, "mcp: generate_resume_brief returns a brief")
+        ccmp, e2 = _mcp62("compare_sessions", {"session_id_a": ids[0], "session_id_b": ids[1]})
+        c.ok(not e2 and "verdict" in ccmp, "mcp: compare_sessions returns a verdict")
+        ctax, e3 = _mcp62("get_error_taxonomy", {})
+        c.ok(not e3 and "by_type" in ctax, "mcp: get_error_taxonomy returns buckets")
+        cvf, e4 = _mcp62("verify_claude_md", {"project_id": "no-such"})
+        c.ok(not e4 and "claims" in cvf, "mcp: verify_claude_md returns claims")
+        cse, e5 = _mcp62("search_by_error_type", {"error_type": "unknown"})
+        c.ok(not e5 and "sessions" in cse, "mcp: search_by_error_type returns sessions")
+        cbf, e6 = _mcp62("get_budget_forecast", {})
+        c.ok(not e6 and "projected_month_usd" in cbf, "mcp: get_budget_forecast returns a projection")
+
+        conn62.close()
+
     # --- web assets: guard the SPA wiring the UI behaviors depend on ------
     # The behaviors themselves are JS/CSS (exercised in a browser), but these
     # checks fail CI if a refactor strips the wiring, on every OS, zero deps.
@@ -1654,6 +1878,26 @@ def run() -> int:
     c.ok(":focus-visible" in css, "css: focus-visible ring for keyboard users")
     c.ok(".tool-card.error" in css, "css: tool errors visually emphasized")
     c.ok("sendBtn.disabled" in app_js, "ask: submit disabled when query empty")
+
+    # --- v0.6.2 keyboard + Insight Engine UI wiring ---
+    with open(os.path.join(web_dir, "keyboard.js"), encoding="utf-8") as fh:
+        kbd = fh.read()
+    c.ok("'R':" in kbd and "intent: 'resume'" in kbd, "keyboard.js: R copies a resume brief")
+    c.ok("'C':" in kbd and "intent: 'compare'" in kbd, "keyboard.js: C opens compare")
+    c.ok("'X':" in kbd and "intent: 'trace'" in kbd, "keyboard.js: X toggles the trace view")
+    c.ok("function resumeCurrentSession(" in app_js and "Copied resume brief to clipboard" in app_js,
+         "app.js: R copies a resume brief to the clipboard")
+    c.ok("function copyText(" in app_js and "execCommand('copy')" in app_js,
+         "app.js: clipboard copy has a textarea fallback")
+    c.ok("function openCompareModal(" in app_js and ".cs-compare-modal" in css,
+         "app.js: compare modal present + styled")
+    c.ok("function renderTraceTree(" in app_js and ".cs-trace-tree" in css,
+         "app.js: trace tree renderer present + styled")
+    c.ok("function errorsCard(" in app_js and ".errors-card" in css,
+         "app.js: error taxonomy card present + styled")
+    c.ok("function forecastCard(" in app_js and ".forecast-card" in css,
+         "app.js: budget forecast card present + styled")
+    c.ok("addEventListener('cs:action'" in app_js, "app.js: R/C/X intents wired to cs:action")
 
     # --- v0.5.1 web wiring -------------------------------------------------
     with open(os.path.join(web_dir, "index.html"), encoding="utf-8") as fh:

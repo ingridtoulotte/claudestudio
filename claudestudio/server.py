@@ -325,6 +325,10 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/session/") and path.endswith("/tags"):
                     sid = path[len("/api/session/"):-len("/tags")]
                     return self._send_json(api.tag_session(conn, sid, body))
+                # --- v0.6.2 write endpoints ---
+                # Route: POST /api/webhooks  (register a local/LAN webhook)
+                if path == "/api/webhooks":
+                    return self._send_json(api.webhooks_add(conn, body))
             finally:
                 conn.close()
         except api.ApiError as exc:
@@ -368,6 +372,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/tags/"):
                     tid = unquote(path[len("/api/tags/"):])
                     return self._send_json(api.tags_delete(conn, tid))
+                # --- v0.6.2 delete endpoints ---
+                # Route: DELETE /api/webhooks/{id}
+                if path.startswith("/api/webhooks/"):
+                    wid = unquote(path[len("/api/webhooks/"):])
+                    return self._send_json(api.webhooks_remove(conn, wid))
             finally:
                 conn.close()
         except api.ApiError as exc:
@@ -531,6 +540,30 @@ class Handler(BaseHTTPRequestHandler):
                     if out is None:
                         return self._send_json({"error": "not found"}, status=404)
                     return self._send_download(out["text"], out["content_type"], out["filename"])
+                # --- v0.6.2 read endpoints (Insight Engine) ---
+                # Route: GET /api/session/{id}/resume
+                if path.startswith("/api/session/") and path.endswith("/resume"):
+                    sid = path[len("/api/session/"):-len("/resume")]
+                    return self._send_json(api.resume_brief(conn, sid))
+                # Route: GET /api/session/{id}/message/{idx}/trace
+                if path.startswith("/api/session/") and "/message/" in path and path.endswith("/trace"):
+                    rest = path[len("/api/session/"):-len("/trace")]
+                    sid, _, idx = rest.partition("/message/")
+                    return self._send_json(api.outcome_trace(conn, sid, idx))
+                if path == "/api/errors/taxonomy":
+                    return self._send_json(api.error_taxonomy_payload(conn, params))
+                if path == "/api/errors/trend":
+                    return self._send_json(api.error_trend_payload(conn, params))
+                if path == "/api/errors/sessions":
+                    return self._send_json(api.sessions_by_error_type(
+                        conn, params.get("type", ""), params.get("limit", 20)))
+                if path == "/api/budget/forecast":
+                    return self._send_json(api.budget_forecast(conn))
+                if path == "/api/webhooks":
+                    return self._send_json(api.webhooks_list(conn))
+                if path.startswith("/api/project/") and path.endswith("/verify-claude-md"):
+                    pid = unquote(path[len("/api/project/"):-len("/verify-claude-md")])
+                    return self._send_json(api.verify_claude_md(conn, pid))
                 if path.startswith("/api/session/"):
                     sid = path[len("/api/session/"):]
                     data = api.get_session(conn, sid)

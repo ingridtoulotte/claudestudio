@@ -48,7 +48,15 @@ from .parser import ParsedSession
 # plus a `preferences` key/value table for cross-device UI state (theme, etc.).
 # All three are user state: created by the schema script (IF NOT EXISTS) and never
 # wiped by reindexing, so an old index opens cleanly and simply starts with no tags.
-SCHEMA_VERSION = 5
+# v6 (v0.6.2): a `session_errors` table holds the classified tool errors found in
+# each session (taxonomy: permission_error/file_not_found/syntax_error/timeout/
+# api_error/assertion_failure/unknown). Like `session_github_refs` it is *derived*
+# data, rebuilt from the source on every (re)index — not user state — so an old
+# index simply starts empty and fills in on the next reindex. The migration only
+# creates the table (schema script, IF NOT EXISTS) and bumps the version; no data
+# is lost. Webhook config (v0.6.2) rides in the existing `preferences` table, so
+# it needs no schema change.
+SCHEMA_VERSION = 6
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -258,6 +266,22 @@ CREATE TABLE IF NOT EXISTS preferences (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- v6 (v0.6.2): classified tool errors per session (Error Taxonomy). Derived data
+-- (rebuilt on every reindex, keyed by session), NOT user state — an old index
+-- starts empty and backfills on the next reindex. `error_type` is one of the
+-- fixed taxonomy buckets; `message_idx` is the owning message's 0-based seq.
+CREATE TABLE IF NOT EXISTS session_errors (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT,
+    error_type  TEXT NOT NULL,
+    error_text  TEXT,
+    tool_name   TEXT,
+    message_idx INTEGER,
+    ts          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_errors_type ON session_errors(error_type);
+CREATE INDEX IF NOT EXISTS idx_session_errors_session ON session_errors(session_id);
 """
 
 
@@ -332,6 +356,9 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     # (IF NOT EXISTS) and hold user state only — an old v4 index gains the empty
     # tables here and keeps every session, favorite, note and annotation intact.
     # Nothing to copy or backfill, so recording the version below is the migration.
+    # v6 (v0.6.2): `session_errors` is created by the schema script (IF NOT EXISTS)
+    # and populated lazily on the next reindex (derived data, never user state), so
+    # there is nothing to migrate beyond recording the version below.
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -368,6 +395,7 @@ def _delete_session(conn, session_id: str) -> None:
     conn.execute("DELETE FROM tool_calls WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM search_fts WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM session_github_refs WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM session_errors WHERE session_id=?", (session_id,))
 
 
 def _insert_session(conn, ps: ParsedSession) -> None:
@@ -465,6 +493,22 @@ def _insert_session(conn, ps: ParsedSession) -> None:
             "INSERT INTO session_github_refs"
             "(session_id,seq,ref,owner,repo,number,kind,url) VALUES (?,?,?,?,?,?,?,?)",
             gh_rows,
+        )
+
+    # v6: classify + store tool errors (Error Taxonomy). Derived data, rebuilt on
+    # every (re)index. Imported lazily to avoid an import cycle.
+    from . import error_taxonomy
+    err_rows = [
+        (ps.session_id, e["error_type"], e["error_text"], e["tool_name"],
+         e["message_idx"], e["ts"])
+        for e in error_taxonomy.extract_errors(ps)
+    ]
+    if err_rows:
+        conn.executemany(
+            "INSERT INTO session_errors"
+            "(session_id,error_type,error_text,tool_name,message_idx,ts) "
+            "VALUES (?,?,?,?,?,?)",
+            err_rows,
         )
 
 

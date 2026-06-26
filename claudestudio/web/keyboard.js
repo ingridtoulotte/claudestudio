@@ -28,6 +28,9 @@
     '/': { event: 'cs:action', intent: 'search', group: 'Global', label: 'Open search' },
     's': { event: 'cs:action', intent: 'star', group: 'Session', label: 'Star / unstar' },
     'e': { event: 'cs:action', intent: 'export', group: 'Session', label: 'Export session' },
+    'R': { event: 'cs:action', intent: 'resume', group: 'Session', label: 'Copy resume brief to clipboard' },
+    'C': { event: 'cs:action', intent: 'compare', group: 'Session', label: 'Compare with another session' },
+    'X': { event: 'cs:action', intent: 'trace', group: 'Session', label: 'Toggle prompt-to-outcome trace' },
     '?': { event: 'cs:action', intent: 'help', group: 'Global', label: 'Show this cheat sheet' },
   };
 

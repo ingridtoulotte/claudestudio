@@ -74,6 +74,25 @@ Every behavioral change should come with a check in `selftest.py`. Use the tiny
 `fixtures.py`. CI runs the self-test on Windows, macOS, and Linux across several
 Python versions — keep it green.
 
+### Running the new self-tests
+
+```bash
+python -m claudestudio --selftest
+# Expected: ALLPASS  (≥ 620 checks)
+```
+
+As of v0.6.1 the self-test runs **623** assertions; new modules each add ≥ 8.
+Never remove or weaken an existing assertion.
+
+## Writing plugins
+
+Want to extend ClaudeStudio without forking it? Drop a `.py` file in
+`~/.claudestudio/plugins/` that defines one of the documented hooks
+(`register_routes`, `register_mcp_tools`, `register_cli_commands`,
+`on_session_indexed`). See **[docs/PLUGINS.md](docs/PLUGINS.md)** for the full
+developer guide, two worked examples, and the security model. Plugins are
+localhost-only and run at your own trust level — review before you install.
+
 ## Style
 
 - Match the surrounding code. Comments explain *why*, not *what*.

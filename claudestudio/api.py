@@ -1459,3 +1459,152 @@ def github_refs_search(conn, params: dict | None = None) -> dict:
     results = index.search_github_refs(conn, number=number, repo=repo, owner=owner)
     return {"query": q, "repo": (f"{owner}/{repo}" if owner else repo),
             "number": number, "results": results}
+
+
+# ===========================================================================
+# v0.6.1 — tags, narrative, file heatmap, digest, benchmark, preferences, share
+# ===========================================================================
+
+class ApiError(Exception):
+    """A handler-level error carrying an HTTP status, so the server can return a
+    clean ``{"error": …}`` with the right code (400/404/…) instead of a 500."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+VALID_THEMES = ("dark", "light", "system", "high-contrast")
+
+
+# --- tags ------------------------------------------------------------------
+
+def tags_list(conn) -> dict:
+    """All user-defined tags with live session counts."""
+    from .tags import TagManager
+    return {"tags": TagManager.list_tags(conn)}
+
+
+def tags_create(conn, body: dict) -> dict:
+    """Create a tag from ``{name, colour?}``. 400 on an empty/invalid name."""
+    from .tags import TagManager
+    name = (body or {}).get("name") or ""
+    colour = (body or {}).get("colour")
+    try:
+        return TagManager.create_tag(conn, name, colour)
+    except ValueError as exc:
+        raise ApiError(400, str(exc)) from exc
+
+
+def tags_delete(conn, tag_id: str) -> dict:
+    from .tags import TagManager
+    TagManager.delete_tag(conn, tag_id)
+    return {"deleted": True, "id": tag_id}
+
+
+def tags_sessions(conn, tag_id: str, params: dict) -> dict:
+    """Paginated sessions carrying one tag."""
+    from .tags import TagManager
+    limit = _int_param((params or {}).get("limit"), 60, lo=1, hi=500)
+    offset = _int_param((params or {}).get("offset"), 0, lo=0)
+    sessions = TagManager.get_sessions_by_tag(conn, tag_id, limit, offset)
+    return {"tag_id": tag_id, "sessions": sessions,
+            "limit": limit, "offset": offset}
+
+
+def session_tags(conn, session_id: str) -> dict:
+    from .tags import TagManager
+    return {"session_id": session_id,
+            "tags": TagManager.get_session_tags(conn, session_id)}
+
+
+def tag_session(conn, session_id: str, body: dict) -> dict:
+    from .tags import TagManager
+    tag_id = (body or {}).get("tag_id") or ""
+    if not tag_id:
+        raise ApiError(400, "tag_id is required")
+    TagManager.tag_session(conn, session_id, tag_id)
+    return {"session_id": session_id, "tag_id": tag_id, "applied": True}
+
+
+def untag_session(conn, session_id: str, tag_id: str) -> dict:
+    from .tags import TagManager
+    TagManager.untag_session(conn, session_id, tag_id)
+    return {"session_id": session_id, "tag_id": tag_id, "removed": True}
+
+
+# --- narrative -------------------------------------------------------------
+
+def session_narrative(conn, session_id: str):
+    """Narrative dict for a session, or None when the session id is unknown."""
+    from . import narrative
+    n = narrative.narrative_for_session(conn, session_id)
+    if isinstance(n, dict) and n.get("error") == "not found":
+        return None
+    return n
+
+
+# --- file heatmap ----------------------------------------------------------
+
+def file_heatmap_payload(conn, params: dict) -> dict:
+    from . import file_heatmap
+    params = params or {}
+    return file_heatmap.compute_file_heatmap(
+        conn, project_id=params.get("project"),
+        since=params.get("since"), until=params.get("until"))
+
+
+def file_heatmap_svg(conn, params: dict) -> str:
+    from . import file_heatmap
+    return file_heatmap.heatmap_svg(file_heatmap_payload(conn, params))
+
+
+# --- digest ----------------------------------------------------------------
+
+def digest_payload(conn, params: dict) -> dict:
+    from . import digest
+    params = params or {}
+    return digest.generate_digest(conn, date=params.get("date"),
+                                  project_id=params.get("project"))
+
+
+def digest_markdown(conn, params: dict) -> str:
+    return digest_payload(conn, params).get("markdown", "")
+
+
+# --- benchmark -------------------------------------------------------------
+
+def benchmark_payload(conn, params: dict) -> dict:
+    from . import benchmark
+    return benchmark.compute_benchmark(conn, (params or {}).get("mode", "week"))
+
+
+# --- preferences -----------------------------------------------------------
+
+def preferences_get(conn) -> dict:
+    """Stored preferences merged over defaults (theme defaults to ``dark``)."""
+    prefs = {"theme": "dark"}
+    prefs.update(index.all_preferences(conn))
+    return prefs
+
+
+def preferences_set(conn, body: dict) -> dict:
+    """Persist preferences. A bad ``theme`` value raises 400. Returns stored set."""
+    body = body or {}
+    if "theme" in body:
+        theme = str(body.get("theme") or "")
+        if theme not in VALID_THEMES:
+            raise ApiError(400, f"invalid theme {theme!r}; "
+                                f"choose one of {', '.join(VALID_THEMES)}")
+        index.set_preference(conn, "theme", theme)
+    return preferences_get(conn)
+
+
+# --- share -----------------------------------------------------------------
+
+def session_share(conn, session_id: str, include_annotations: bool = True):
+    """Self-contained share HTML for a session, or None when it doesn't exist."""
+    from . import share
+    html = share.build_share_pack(conn, session_id, include_annotations)
+    return html or None

@@ -561,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 16, "mcp exposes 16 tools")
+        c.eq(len(tl["result"]["tools"]), 20, "mcp exposes 20 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -625,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.6.0", "package version bumped to 0.6.0")
-        c.eq(init["result"]["serverInfo"]["version"], "0.6.0", "mcp serverInfo is 0.6.0")
+        c.eq(claudestudio.__version__, "0.6.1", "package version bumped to 0.6.1")
+        c.eq(init["result"]["serverInfo"]["version"], "0.6.1", "mcp serverInfo is 0.6.1")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.6.0" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "16" in out, "cli info reports the 16 MCP tools")
+        c.ok("0.6.1" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "20" in out, "cli info reports the 20 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -1017,7 +1017,7 @@ def run() -> int:
         from . import patterns as patmod2
         from . import sync as syncmod
 
-        c.eq(index.SCHEMA_VERSION, 4, "schema version is 4 (github refs)")
+        c.eq(index.SCHEMA_VERSION, 5, "schema version is 5 (session tags)")
 
         # craft a session (real .jsonl → reindex) carrying GitHub refs + a
         # cross-session reference phrase + a scoreable prompt.
@@ -1294,6 +1294,327 @@ def run() -> int:
                         "--db", os.path.join(sync_dir, "index.db")])
         c.eq(rc, 0, "cli sync --dry-run exits 0")
         c.ok("dry run" in out, "cli sync --dry-run announces a dry run")
+
+        # ===================================================================
+        # v0.6.1 — Deep Intelligence & Community: tags, narrative, file
+        # heatmap, digest, benchmark, share pack, preferences, plugins.
+        # ===================================================================
+        from claudestudio import benchmark as _bench
+        from claudestudio import digest as _digest
+        from claudestudio import file_heatmap as _fh
+        from claudestudio import narrative as _narr
+        from claudestudio import plugin_loader as _pl
+        from claudestudio import share as _share
+        from claudestudio.tags import TagManager as _TM
+        from claudestudio.tags import normalise_colour as _nc
+        from claudestudio.tags import normalise_name as _nn
+
+        f61root = os.path.join(tmp, "f61root")
+        os.makedirs(f61root)
+        fixtures.build_corpus(f61root, count=12, seed=11)
+        f61db = os.path.join(tmp, "f61.db")
+        f61 = index.connect(f61db)
+        index.reindex(f61, f61root, force=True)
+        _r = f61.execute(
+            "SELECT session_id, last_epoch FROM sessions "
+            "ORDER BY last_epoch DESC LIMIT 1").fetchone()
+        f61_sid = _r["session_id"]
+        f61_day = parser.local_datetime(_r["last_epoch"]).strftime("%Y-%m-%d")
+        empty61 = index.connect(os.path.join(tmp, "empty61.db"))
+
+        # --- schema v5 user-owned tables -----------------------------------
+        v5tabs = {r[0] for r in f61.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        c.ok({"available_tags", "session_tags", "preferences"} <= v5tabs,
+             "schema v5 creates available_tags, session_tags, preferences")
+
+        # --- tags ----------------------------------------------------------
+        c.eq(_nn("Bug Fix!"), "bug-fix", "tag name normalises to lowercase-hyphen")
+        c.eq(_nn("  Multiple   Spaces  "), "multiple-spaces", "tag name collapses spaces")
+        c.eq(_nn("x" * 50), "x" * 32, "tag name capped at 32 chars")
+        c.eq(_nn("!!!"), "", "pure-punctuation name normalises to empty")
+        c.eq(_nc("#abcdef"), "#abcdef", "valid hex colour kept")
+        c.eq(_nc("nope"), "#9a8cff", "invalid colour falls back to brand purple")
+        tg = _TM.create_tag(f61, "Architecture", "#ff8a5b")
+        c.eq(tg["name"], "architecture", "create_tag stores normalised name")
+        c.eq(tg["colour"], "#ff8a5b", "create_tag stores colour")
+        c.eq(tg["session_count"], 0, "new tag has zero sessions")
+        c.eq(_TM.create_tag(f61, "architecture", None)["id"], tg["id"],
+             "create_tag is idempotent by normalised name")
+        try:
+            _TM.create_tag(f61, "  !  ")
+            c.ok(False, "create_tag rejects an empty name")
+        except ValueError:
+            c.ok(True, "create_tag rejects an empty name")
+        _TM.tag_session(f61, f61_sid, tg["id"])
+        _TM.tag_session(f61, f61_sid, tg["id"])  # idempotent re-apply
+        st = _TM.get_session_tags(f61, f61_sid)
+        c.eq(len(st), 1, "get_session_tags returns the applied tag")
+        c.eq(st[0]["name"], "architecture", "applied tag name round-trips")
+        c.eq(next(t["session_count"] for t in _TM.list_tags(f61) if t["id"] == tg["id"]), 1,
+             "list_tags counts one tagged session")
+        c.ok(any(s["session_id"] == f61_sid for s in _TM.get_sessions_by_tag(f61, tg["id"])),
+             "get_sessions_by_tag returns the tagged session")
+        c.ok(any(t["name"] == "architecture" for t in _TM.search_tags(f61, "arch")),
+             "search_tags matches a substring")
+        c.eq(len(_TM.search_tags(f61, "")), len(_TM.list_tags(f61)),
+             "empty search returns all tags")
+        _TM.untag_session(f61, f61_sid, tg["id"])
+        c.eq(len(_TM.get_session_tags(f61, f61_sid)), 0, "untag_session removes the tag")
+        _TM.delete_tag(f61, tg["id"])
+        c.ok(all(t["id"] != tg["id"] for t in _TM.list_tags(f61)),
+             "delete_tag removes the tag from the palette")
+
+        # --- preferences ---------------------------------------------------
+        c.eq(api.preferences_get(f61)["theme"], "dark", "default theme is dark")
+        api.preferences_set(f61, {"theme": "light"})
+        c.eq(api.preferences_get(f61)["theme"], "light", "preferences_set persists theme")
+        c.eq(index.get_preference(f61, "theme"), "light", "index.get_preference round-trips")
+        try:
+            api.preferences_set(f61, {"theme": "rainbow"})
+            c.ok(False, "invalid theme rejected")
+        except api.ApiError as _e:
+            c.eq(_e.status, 400, "invalid theme raises ApiError 400")
+        c.ok("theme" in index.all_preferences(f61), "all_preferences includes theme")
+
+        # --- narrative (4 quality categories + recovery + next steps) ------
+        def _mk(role, text="", thinking="", tools=()):
+            m = parser.Message(uuid="u", parent_uuid=None, role=role, ts="", seq=0)
+            m.text, m.thinking = text, thinking
+            m.tool_calls = [parser.ToolCall(tool_use_id="t", name=n, input=i, ts="",
+                                            is_error=e) for (n, i, e) in tools]
+            return m
+
+        def _sess(msgs):
+            p = parser.ParsedSession(session_id="s", file_path="", file_mtime=0, file_size=0)
+            p.first_ts, p.last_ts = "2026-06-01T10:00:00Z", "2026-06-01T10:30:00Z"
+            p.messages = msgs
+            return p
+
+        _ok_tools = [("Read", {"path": "a.py"}, False)] * 3 + \
+                    [("Edit", {"file_path": "auth.py"}, False)] * 3
+        succ = _narr.generate_narrative(_sess([
+            _mk("user", "Refactor the auth module to use JWT tokens for sessions"),
+            _mk("assistant", "done", tools=_ok_tools),
+            _mk("assistant", "All set, the tests pass."),
+        ]), health_score=85)
+        c.eq(succ["quality"], "successful", "narrative: clean high-health run is successful")
+        c.ok(succ["headline"].startswith("✅"), "narrative: successful headline emoji")
+        c.ok("auth.py" in succ["files_changed"], "narrative: files_changed lists the edited file")
+        c.ok(succ["word_count"] > 0, "narrative: word_count populated")
+        c.ok(succ["headline"].startswith("✅ Successful:"), "narrative: headline format")
+        part = _narr.generate_narrative(_sess([
+            _mk("user", "fix the bug"),
+            _mk("assistant", "working", tools=_ok_tools),
+            _mk("assistant", "partial progress so far"),
+        ]), health_score=55)
+        c.eq(part["quality"], "partial", "narrative: mid-health run is partial")
+        c.ok(part["headline"].startswith("⚠"), "narrative: partial headline emoji")
+        aband = _narr.generate_narrative(_sess([
+            _mk("user", "do the thing"),
+            _mk("assistant", "", tools=[("Bash", {"command": "x"}, False)]),
+        ]), health_score=85)
+        c.eq(aband["quality"], "abandoned", "narrative: ending mid-tool-call is abandoned")
+        c.ok(aband["headline"].startswith("⛔"), "narrative: abandoned headline emoji")
+        expl = _narr.generate_narrative(_sess([
+            _mk("user", "what do you think about X?"),
+            _mk("assistant", "", thinking="long deliberation " * 50,
+                tools=[("Read", {"path": "a"}, False)]),
+            _mk("assistant", "Here are my thoughts."),
+        ]), health_score=85)
+        c.eq(expl["quality"], "exploratory", "narrative: thinking-heavy low-tool run is exploratory")
+        c.ok(expl["headline"].startswith("🔍"), "narrative: exploratory headline emoji")
+        rec = _narr.generate_narrative(_sess([
+            _mk("user", "build it"),
+            _mk("assistant", "trying", tools=[("Bash", {"command": "x"}, True)]),
+            _mk("assistant", "fixed it", tools=[("Bash", {"command": "y"}, False)]),
+        ]), health_score=60)
+        c.eq(rec["errors_encountered"], 1, "narrative: counts the error")
+        c.ok(rec["recovery"] and "Recovered via Bash" in rec["recovery"],
+             "narrative: recovery detected after an error")
+        nxt = _narr.generate_narrative(_sess([
+            _mk("user", "ship it"),
+            _mk("assistant", "TODO: wire up the integration tests", tools=_ok_tools),
+        ]), health_score=85)
+        c.ok(nxt["next_steps"] and "TODO" in nxt["next_steps"],
+             "narrative: next_steps picks up a TODO")
+        hg = _narr.generate_narrative(_sess([
+            _mk("user", "y" * 90), _mk("assistant", "k")]), health_score=85)
+        c.ok(hg["headline"].endswith("…"), "narrative: long goal truncated with ellipsis")
+        codey = _narr.generate_narrative(_sess([
+            _mk("user", "Look at ```python\nsecret_code()\n``` then refactor"),
+            _mk("assistant", "k")]), health_score=85)
+        c.ok("secret_code" not in codey["goal"], "narrative: goal strips fenced code blocks")
+        c.eq(_narr.narrative_for_session(f61, "does-not-exist").get("error"), "not found",
+             "narrative_for_session: missing session reports not found")
+        c.ok(not _narr.narrative_for_session(f61, f61_sid).get("error"),
+             "narrative_for_session: indexed session narrates")
+
+        # --- file heatmap --------------------------------------------------
+        hm = _fh.compute_file_heatmap(f61)
+        c.ok(hm["total_files"] >= 1, "heatmap finds edited files")
+        c.ok(all(0.0 <= f["heat_score"] <= 1.0 for f in hm["files"]),
+             "heatmap heat_score normalised to 0..1")
+        c.ok(all(hm["files"][i]["heat_score"] >= hm["files"][i + 1]["heat_score"]
+                 for i in range(len(hm["files"]) - 1)),
+             "heatmap sorted by heat_score descending")
+        c.ok(all({"path", "edit_count", "session_count", "heat_score"} <= set(f)
+                 for f in hm["files"]), "heatmap file records carry required keys")
+        c.eq(_fh.compute_file_heatmap(empty61)["total_files"], 0,
+             "heatmap: empty corpus returns no files safely")
+        c.eq(_fh.compute_file_heatmap(f61, since="2099-01-01")["total_files"], 0,
+             "heatmap: future since-filter excludes everything")
+        svg = _fh.heatmap_svg(hm)
+        import xml.dom.minidom as _mdom
+        _mdom.parseString(svg)
+        c.ok(True, "heatmap SVG is valid XML")
+        c.ok('role="img"' in svg and "aria-label" in svg, "heatmap SVG has a11y role + label")
+        c.ok("data-tip" in svg, "heatmap SVG cells carry data-tip tooltips")
+        c.ok(_fh.heatmap_svg(_fh.compute_file_heatmap(empty61)).startswith("<svg"),
+             "heatmap SVG of an empty corpus still renders")
+        c.ok(len(_fh.top_files(f61, limit=5)["files"]) <= 5, "top_files honours the limit")
+
+        # --- digest --------------------------------------------------------
+        dg = _digest.generate_digest(f61, date=f61_day)
+        c.ok(dg["session_count"] >= 1, "digest: day with sessions counts them")
+        c.ok(dg["markdown"].startswith("## 📅"), "digest markdown has the dated header")
+        c.ok("session" in dg["markdown"], "digest markdown names the session count")
+        c.ok("$" in dg["markdown"], "digest markdown shows cost")
+        c.ok(all(s["health_grade"] in "ABCDEF" for s in dg["session_summaries"]),
+             "digest session summaries carry an A–F grade")
+        c.ok(isinstance(dg["tools_used"], dict), "digest tools_used is a dict")
+        c.ok(f61_day in dg["markdown"], "digest markdown carries the date")
+        empty_dg = _digest.generate_digest(f61, date="1999-01-01")
+        c.eq(empty_dg["session_count"], 0, "digest: empty day returns zero sessions")
+        c.ok("No Claude Code sessions" in empty_dg["markdown"],
+             "digest: empty day markdown is friendly")
+        c.eq(_digest.generate_digest(f61, date="not-a-date")["date"], _digest._today_str(),
+             "digest: an unparseable date falls back to today")
+        c.ok("<html" in _digest.digest_html(f61, date=f61_day), "digest_html renders a page")
+
+        # --- benchmark -----------------------------------------------------
+        c.close(_bench._pct(110, 100), 10.0, "benchmark delta: +10%")
+        c.close(_bench._pct(90, 100), -10.0, "benchmark delta: -10%")
+        c.close(_bench._pct(5, 0), 100.0, "benchmark delta: new-from-zero is +100%")
+        c.close(_bench._pct(0, 0), 0.0, "benchmark delta: zero over zero is 0%")
+        c.eq(_bench._trend(6.0), "improving", "benchmark trend: >+5% improving")
+        c.eq(_bench._trend(-6.0), "declining", "benchmark trend: <-5% declining")
+        c.eq(_bench._trend(2.0), "stable", "benchmark trend: within ±5% is stable")
+        for _mode in ("week", "month", "quarter"):
+            b = _bench.compute_benchmark(f61, _mode)
+            c.eq(b["mode"], _mode, "benchmark mode " + _mode + " echoed")
+            c.ok({"current", "previous", "delta", "trend", "verdict"} <= set(b),
+                 "benchmark " + _mode + " returns the full shape")
+        be = _bench.compute_benchmark(empty61, "week")
+        c.eq(be["trend"], "stable", "benchmark: empty corpus is stable")
+        c.ok(isinstance(be["verdict"], str) and be["verdict"], "benchmark: verdict is a string")
+
+        # --- share pack ----------------------------------------------------
+        sp = _share.build_share_pack(f61, f61_sid)
+        c.ok(sp.startswith("<!doctype html>") and "</html>" in sp, "share pack is an HTML document")
+        c.ok('name="claudestudio-share-version"' in sp, "share pack carries the version meta")
+        c.ok("not connected to ClaudeStudio" in sp, "share pack shows the offline banner")
+        c.ok("cs-share-data" in sp, "share pack inlines the session data block")
+        c.ok(len(sp.encode("utf-8")) < 2_000_000, "share pack is under 2 MB")
+        c.ok("http://" not in sp and "https://" not in sp, "share pack makes no external calls")
+        index.upsert_annotation(f61, f61_sid, -1, "private reviewer note here")
+        with_ann = _share.build_share_pack(f61, f61_sid, include_annotations=True)
+        without_ann = _share.build_share_pack(f61, f61_sid, include_annotations=False)
+        c.ok("private reviewer note here" in with_ann, "share pack embeds annotations when opted in")
+        c.ok("private reviewer note here" not in without_ann,
+             "share pack omits annotations when opted out")
+        c.eq(_share.build_share_pack(f61, "nope"), "", "share pack of a missing session is empty")
+
+        # --- plugin loader -------------------------------------------------
+        c.eq(_pl.discover_plugins(os.path.join(tmp, "no-such-dir")), [],
+             "discover_plugins: missing dir returns []")
+        plug_dir = os.path.join(tmp, "plugins61")
+        os.makedirs(plug_dir)
+        with open(os.path.join(plug_dir, "good.py"), "w", encoding="utf-8") as fh:
+            fh.write("FLAG = []\n"
+                     "def register_routes(handler):\n    FLAG.append(handler)\n"
+                     "def on_session_indexed(db, sid):\n    pass\n")
+        with open(os.path.join(plug_dir, "bad.py"), "w", encoding="utf-8") as fh:
+            fh.write("def register_routes(handler)\n    pass\n")  # syntax error
+        loaded = _pl.load_plugins(plug_dir)
+        c.eq(len(loaded), 2, "load_plugins loads every discovered file")
+        good = next(p for p in loaded if p.name == "good")
+        bad = next(p for p in loaded if p.name == "bad")
+        c.ok(good.ok and "register_routes" in good.hooks,
+             "valid plugin loads with its hooks detected")
+        c.ok(not bad.ok and bad.error, "plugin with a syntax error is skipped with an error")
+        c.eq(len(_pl.get_loaded_plugins()), 2, "get_loaded_plugins returns the singleton set")
+        _marker = object()
+        _pl.apply_route_hooks(_marker)
+        c.ok(good.module.FLAG and good.module.FLAG[-1] is _marker,
+             "apply_route_hooks invokes register_routes with the handler")
+
+        # --- MCP tools #17–20 ---------------------------------------------
+        def _f61rpc(req):
+            return mcp.handle_request(f61db, req)
+
+        f61names = {t["name"] for t in
+                    _f61rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]}
+        c.ok({"list_tags", "get_session_tags", "get_session_narrative", "get_file_heatmap"}
+             <= f61names, "mcp exposes the 4 new v0.6.1 tools")
+
+        def _f61call(name, arguments):
+            r = _f61rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                         "params": {"name": name, "arguments": arguments}})
+            return json.loads(r["result"]["content"][0]["text"]), r["result"]["isError"]
+
+        _lt, _e = _f61call("list_tags", {})
+        c.ok(not _e and "tags" in _lt, "mcp list_tags returns tags")
+        _na, _e = _f61call("get_session_narrative", {"session_id": f61_sid})
+        c.ok(not _e and "headline" in _na, "mcp get_session_narrative returns a narrative")
+        _hf, _e = _f61call("get_file_heatmap", {})
+        c.ok(not _e and "files" in _hf, "mcp get_file_heatmap returns hottest files")
+        _ts, _e = _f61call("get_session_tags", {"session_id": f61_sid})
+        c.ok(not _e and "tags" in _ts, "mcp get_session_tags returns a session's tags")
+
+        # --- new CLI subcommands -------------------------------------------
+        rc, out = _run(["tag", "--list", "--db", f61db])
+        c.eq(rc, 0, "cli tag --list exits 0")
+        rc, out = _run(["tag", "--add", "ship-it", "--db", f61db])
+        c.ok(rc == 0 and "ship-it" in out, "cli tag --add creates a tag")
+        rc, out = _run(["narrative", f61_sid, "--db", f61db])
+        c.eq(rc, 0, "cli narrative exits 0")
+        rc, out = _run(["narrative", "--last", "--db", f61db])
+        c.ok(rc == 0 and "Quality" in out, "cli narrative --last prints a narrative")
+        rc, out = _run(["digest", "--date", f61_day, "--db", f61db])
+        c.ok(rc == 0 and "Digest" in out, "cli digest prints the dated digest")
+        rc, out = _run(["benchmark", "--mode", "month", "--json", "--db", f61db])
+        c.ok(rc == 0 and out.strip().startswith("{"), "cli benchmark --json emits JSON")
+        rc, out = _run(["share", "--last", "--db", f61db])
+        c.ok(rc == 0 and "not connected" in out, "cli share --last emits the share HTML")
+
+        # --- API route wiring + content types (integration) ----------------
+        with open(os.path.join(os.path.dirname(claudestudio.__file__), "server.py"),
+                  encoding="utf-8") as fh:
+            srv = fh.read()
+        c.ok('"/api/tags"' in srv, "server wires /api/tags")
+        c.ok('"/api/files/heatmap.svg"' in srv and "image/svg+xml" in srv,
+             "server wires heatmap.svg with image/svg+xml")
+        c.ok('"/api/files/heatmap"' in srv, "server wires /api/files/heatmap")
+        c.ok('"/api/digest.md"' in srv and "text/markdown" in srv,
+             "server wires digest.md with text/markdown")
+        c.ok('"/api/digest"' in srv, "server wires /api/digest")
+        c.ok('"/api/benchmark"' in srv, "server wires /api/benchmark")
+        c.ok('"/api/preferences"' in srv and "_send_empty(204)" in srv,
+             "server wires /api/preferences with a 204 write")
+        c.ok('"/narrative"' in srv and '"/share.html"' in srv,
+             "server wires the session narrative + share routes")
+        c.ok("except api.ApiError" in srv, "server maps ApiError to its status code")
+        for _fn in ("tags_list", "tags_create", "tags_delete", "file_heatmap_payload",
+                    "digest_payload", "benchmark_payload", "preferences_get",
+                    "preferences_set", "session_narrative", "session_share"):
+            c.ok(hasattr(api, _fn), "api exposes " + _fn)
+        c.ok(hasattr(api, "ApiError"), "api exposes ApiError")
+        c.ok(os.path.isfile(os.path.join(os.path.dirname(claudestudio.__file__),
+             "web", "themes.js")), "web/themes.js ships")
+
+        empty61.close()
+        f61.close()
 
         vconn.close()
 

@@ -210,6 +210,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_empty(self, status=204):
+        """A bodyless response (e.g. 204 No Content for a preferences write)."""
+        self.send_response(status)
+        self._emit_security_headers()
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
     def _send_zip(self, data, filename, status=200):
         self.send_response(status)
         self._emit_security_headers()
@@ -305,8 +313,22 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/session/") and path.endswith("/annotations"):
                     sid = path[len("/api/session/"):-len("/annotations")]
                     return self._send_json(api.upsert_annotation(conn, sid, body))
+                # --- v0.6.1 write endpoints ---
+                # Route: POST /api/tags
+                if path == "/api/tags":
+                    return self._send_json(api.tags_create(conn, body))
+                # Route: POST /api/preferences
+                if path == "/api/preferences":
+                    api.preferences_set(conn, body)
+                    return self._send_empty(204)
+                # Route: POST /api/session/{id}/tags
+                if path.startswith("/api/session/") and path.endswith("/tags"):
+                    sid = path[len("/api/session/"):-len("/tags")]
+                    return self._send_json(api.tag_session(conn, sid, body))
             finally:
                 conn.close()
+        except api.ApiError as exc:
+            return self._send_json({"error": exc.message}, status=exc.status)
         except Exception as exc:  # noqa: BLE001 - surface as JSON, never 500-crash
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
@@ -336,8 +358,20 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/prompts/"):
                     pid = path[len("/api/prompts/"):]
                     return self._send_json(api.delete_prompt(conn, pid))
+                # --- v0.6.1 delete endpoints ---
+                # Route: DELETE /api/session/{id}/tags/{tag_id}
+                if path.startswith("/api/session/") and "/tags/" in path:
+                    rest = path[len("/api/session/"):]
+                    sid, _, tid = rest.partition("/tags/")
+                    return self._send_json(api.untag_session(conn, sid, unquote(tid)))
+                # Route: DELETE /api/tags/{tag_id}
+                if path.startswith("/api/tags/"):
+                    tid = unquote(path[len("/api/tags/"):])
+                    return self._send_json(api.tags_delete(conn, tid))
             finally:
                 conn.close()
+        except api.ApiError as exc:
+            return self._send_json({"error": exc.message}, status=exc.status)
         except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
@@ -383,6 +417,56 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.patterns_momentum(conn, params))
                 if path == "/api/github-refs/search":
                     return self._send_json(api.github_refs_search(conn, params))
+                # --- v0.6.1 read endpoints ---
+                # Route: GET /api/tags
+                if path == "/api/tags":
+                    return self._send_json(api.tags_list(conn))
+                # Route: GET /api/tags/{tag_id}/sessions
+                if path.startswith("/api/tags/") and path.endswith("/sessions"):
+                    tid = unquote(path[len("/api/tags/"):-len("/sessions")])
+                    return self._send_json(api.tags_sessions(conn, tid, params))
+                # Route: GET /api/files/heatmap.svg
+                if path == "/api/files/heatmap.svg":
+                    return self._send_bytes(
+                        api.file_heatmap_svg(conn, params).encode("utf-8"),
+                        "image/svg+xml")
+                # Route: GET /api/files/heatmap
+                if path == "/api/files/heatmap":
+                    return self._send_json(api.file_heatmap_payload(conn, params))
+                # Route: GET /api/digest.md
+                if path == "/api/digest.md":
+                    return self._send_bytes(
+                        api.digest_markdown(conn, params).encode("utf-8"),
+                        "text/markdown; charset=utf-8")
+                # Route: GET /api/digest
+                if path == "/api/digest":
+                    return self._send_json(api.digest_payload(conn, params))
+                # Route: GET /api/benchmark
+                if path == "/api/benchmark":
+                    return self._send_json(api.benchmark_payload(conn, params))
+                # Route: GET /api/preferences
+                if path == "/api/preferences":
+                    return self._send_json(api.preferences_get(conn))
+                # Route: GET /api/session/{id}/narrative
+                if path.startswith("/api/session/") and path.endswith("/narrative"):
+                    sid = path[len("/api/session/"):-len("/narrative")]
+                    data = api.session_narrative(conn, sid)
+                    if data is None:
+                        return self._send_json({"error": "not found"}, status=404)
+                    return self._send_json(data)
+                # Route: GET /api/session/{id}/share.html
+                if path.startswith("/api/session/") and path.endswith("/share.html"):
+                    sid = path[len("/api/session/"):-len("/share.html")]
+                    incl = params.get("annotations", "1") not in ("0", "false", "no")
+                    html = api.session_share(conn, sid, incl)
+                    if html is None:
+                        return self._send_json({"error": "not found"}, status=404)
+                    return self._send_download(html, "text/html; charset=utf-8",
+                                               f"{sid[:12]}-share.html")
+                # Route: GET /api/session/{id}/tags
+                if path.startswith("/api/session/") and path.endswith("/tags"):
+                    sid = path[len("/api/session/"):-len("/tags")]
+                    return self._send_json(api.session_tags(conn, sid))
                 if path.startswith("/api/session/") and path.endswith("/github-refs"):
                     sid = path[len("/api/session/"):-len("/github-refs")]
                     return self._send_json(api.github_refs(conn, sid))
@@ -455,6 +539,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(data)
             finally:
                 conn.close()
+        except api.ApiError as exc:
+            return self._send_json({"error": exc.message}, status=exc.status)
         except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
@@ -567,6 +653,14 @@ def make_server(db_path, projects_root=None, host="127.0.0.1", port=8787):
     Handler.db_path = db_path
     Handler.projects_root = projects_root
     Handler.bind_host = host
+    # v0.6.1: load user plugins and let them register HTTP routes on the handler.
+    # Isolated — a broken plugin logs a warning and never blocks the server.
+    try:
+        from . import plugin_loader
+        plugin_loader.load_plugins()
+        plugin_loader.apply_route_hooks(Handler)
+    except Exception:  # noqa: BLE001 — plugin loading must never stop the server
+        pass
     httpd = ThreadingHTTPServer((host, port), Handler)
     # Lets open SSE streams (/api/events) wake up and exit promptly on shutdown
     # instead of blocking until the next 3s poll or a client disconnect.

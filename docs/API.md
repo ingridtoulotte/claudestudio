@@ -252,6 +252,85 @@ Server-Sent Events: `{"type":"line","text":...}` per line, then
 
 ---
 
+## v0.6.1 — tags, narrative, heatmap, digest, benchmark, preferences, share
+
+### `GET /api/tags`
+All user-defined tags with live session counts.
+`{"tags":[{id,name,colour,created_at,session_count}]}`.
+```bash
+curl -s http://127.0.0.1:8787/api/tags
+```
+
+### `POST /api/tags`
+Create a tag. Body `{"name":"bug-fix","colour":"#ff8a5b"}` (colour optional,
+default `#9a8cff`). Names are normalised (lowercase, ≤32 chars, `[a-z0-9_-]`).
+Returns the tag row. An empty/invalid name → `400 {"error":...}`. Idempotent by
+normalised name.
+
+### `DELETE /api/tags/{tag_id}`
+Delete a tag and detach it from every session. `{"deleted":true,"id":...}`.
+
+### `GET /api/tags/{tag_id}/sessions`
+Sessions carrying one tag, most recent first. Paginated: `?limit=` (1–500,
+default 60), `?offset=`. `{"tag_id","sessions":[…],"limit","offset"}`.
+
+### `GET /api/session/{id}/tags`
+Tags applied to one session. `{"session_id","tags":[{id,name,colour,created_at}]}`.
+
+### `POST /api/session/{id}/tags`
+Apply a tag to a session. Body `{"tag_id":"…"}`. Missing `tag_id` → `400`.
+`{"session_id","tag_id","applied":true}`.
+
+### `DELETE /api/session/{id}/tags/{tag_id}`
+Remove one tag from one session. `{"session_id","tag_id","removed":true}`.
+
+### `GET /api/session/{id}/narrative`
+Deterministic one-paragraph narrative of a session (no model calls).
+`{"headline","goal","approach","outcome","files_changed":[…],"errors_encountered",
+"recovery","next_steps","quality","word_count","session_id"}`. Unknown id → `404`.
+```bash
+curl -s http://127.0.0.1:8787/api/session/<id>/narrative
+```
+
+### `GET /api/files/heatmap`
+File × metric heatmap over the corpus. Filters: `?project=`, `?since=YYYY-MM-DD`,
+`?until=YYYY-MM-DD`. Returns
+`{"files":[{path,edit_count,session_count,last_touched,total_tokens,projects,weeks,
+heat_score}],"total_files","date_range":{from,to}}`. An empty corpus is safe.
+
+### `GET /api/files/heatmap.svg`
+The same data rendered as a standalone SVG (top 20 files × last 12 ISO weeks).
+`image/svg+xml`; `<svg role="img" aria-label="…">`, cells carry `data-tip`.
+
+### `GET /api/digest`
+Standup-ready digest for a calendar date. `?date=YYYY-MM-DD` (default today),
+`?project=`. Returns `{"date","session_count","total_tokens","total_cost_usd",
+"top_project","files_touched":[…],"tools_used":{…},"highlights":[…],
+"session_summaries":[…],"markdown"}`. An empty day is safe.
+
+### `GET /api/digest.md`
+The digest's pre-rendered Markdown block as `text/markdown`.
+
+### `GET /api/benchmark`
+Current vs previous period efficiency comparison. `?mode=week|month|quarter`
+(default week). Returns `{"mode","current","previous","delta","trend","verdict",
+"highlights"}`. Metrics include `output_per_dollar`, `tool_success_rate`,
+`avg_health_score`.
+
+### `GET /api/preferences`
+Stored cross-device UI preferences merged over defaults. `{"theme":"dark",…}`.
+
+### `POST /api/preferences`
+Persist preferences. Body `{"theme":"light"}` (one of `dark`, `light`, `system`,
+`high-contrast`). `204 No Content` on success; an invalid theme → `400 {"error":…}`.
+
+### `GET /api/session/{id}/share.html`
+A fully self-contained share pack: one HTML file with the session inlined,
+read-only replay, no server, no network. `?annotations=0` omits personal notes.
+`text/html` (attachment). Unknown id → `404`.
+
+---
+
 ## Notes for builders
 
 - Prefer the **MCP server** (`claudestudio mcp`) if you're integrating with

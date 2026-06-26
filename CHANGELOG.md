@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-26
+
+The "Deep Intelligence & Community" release. v0.6.1 adds a personal knowledge
+layer (session tags), deterministic session narratives for stand-up notes and PR
+descriptions, a per-file impact heatmap, a daily digest, a dark/light/system/
+high-contrast theme system, self-contained share packs, week/month/quarter
+efficiency benchmarks, and the foundations of a plugin API. Still 100% local,
+zero runtime dependencies, deterministic — the self-test grows 495 → 623 checks,
+the MCP server 16 → 20 tools, and the schema migrates in place to v5. The
+`CODE_OF_CONDUCT.md` file is untouched.
+
+### Added
+- Session tags & labels system (`tags.py`, schema v5, API, MCP tools #17–18, CLI `tag`)
+- Smart session narratives (`narrative.py`, `/api/session/{id}/narrative`, MCP tool #19, CLI `narrative`)
+- Per-file impact heatmap (`file_heatmap.py`, `/api/files/heatmap`, `/api/files/heatmap.svg`, MCP tool #20)
+- Daily digest (`digest.py`, `/api/digest`, `/api/digest.md`, CLI `digest`)
+- Theme system: dark / light / system / high-contrast (`web/themes.js`, `/api/preferences`, `T` shortcut)
+- Static shareable session export (`share.py`, `/api/session/{id}/share.html`, CLI `share`)
+- Benchmark command (`benchmark.py`, `/api/benchmark`, CLI `benchmark`)
+- Plugin API foundations (`plugin_loader.py`, `~/.claudestudio/plugins/`, `docs/PLUGINS.md`)
+- Enhanced `doctor` command: index freshness, schema version, plugin status, preferences,
+  hottest file, benchmark verdict, auto-fix hints and exit codes (0 healthy / 1 warnings / 2 critical)
+
+### Changed
+- MCP server grows 16 → 20 tools
+- Self-test grows 495 → 623 assertions
+- Schema migrates v4 → v5 (in-place; new: `available_tags`, `session_tags`, `preferences` tables)
+- CLI: 5 new subcommands (`digest`, `narrative`, `share`, `benchmark`, `tag`)
+
+### Migrations
+- Schema v4 → v5: adds `available_tags`, `session_tags`, `preferences` tables. User state
+  only, never wiped on reindex. An old index opens cleanly and starts with empty tags.
+
 ## [0.6.0] - 2026-06-26
 
 The "workspace, completed" release. v0.6.0 turns ClaudeStudio from a session

@@ -239,6 +239,41 @@ def _t_get_file_heatmap(conn, args: dict) -> dict:
         since=args.get("since"), until=args.get("until"))
 
 
+# --- v0.6.2 tools (#21–#26, the "Insight Engine") --------------------------
+
+def _t_generate_resume_brief(conn, args: dict) -> dict:
+    """A copy-paste-ready brief to resume a session in a new Claude Code window."""
+    return api.resume_brief(conn, str(args.get("session_id") or ""))
+
+
+def _t_compare_sessions(conn, args: dict) -> dict:
+    """Compare two sessions by cost, tokens, health, prompts and files touched."""
+    return api.compare(conn, str(args.get("session_id_a") or ""),
+                        str(args.get("session_id_b") or ""))
+
+
+def _t_get_error_taxonomy(conn, args: dict) -> dict:
+    """Error-type distribution across sessions, optionally scoped by project/date."""
+    return api.error_taxonomy_payload(
+        conn, {"project": args.get("project"), "since": args.get("since")})
+
+
+def _t_verify_claude_md(conn, args: dict) -> dict:
+    """Whether a project's CLAUDE.md claims match its actual session history."""
+    return api.verify_claude_md(conn, str(args.get("project_id") or args.get("project") or ""))
+
+
+def _t_search_by_error_type(conn, args: dict) -> dict:
+    """Sessions containing errors of a given taxonomy type, most recent first."""
+    return api.sessions_by_error_type(
+        conn, str(args.get("error_type") or ""), args.get("limit", 20))
+
+
+def _t_get_budget_forecast(conn, args: dict) -> dict:
+    """Project end-of-month spend, biggest cost driver and efficiency opportunity."""
+    return api.budget_forecast(conn)
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -457,6 +492,71 @@ TOOLS = [
             },
         },
         "handler": _t_get_file_heatmap,
+    },
+    {
+        "name": "generate_resume_brief",
+        "description": "Generate a copy-paste-ready context brief to resume a session in a new Claude Code window: last tool calls, recent errors, uncommitted files, branch/SHA, and open questions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_generate_resume_brief,
+    },
+    {
+        "name": "compare_sessions",
+        "description": "Compare two sessions by cost, tokens, health, prompt overlap and files touched, with a plain-English verdict on which approach was better.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id_a": {"type": "string"},
+                "session_id_b": {"type": "string"},
+            },
+            "required": ["session_id_a", "session_id_b"],
+        },
+        "handler": _t_compare_sessions,
+    },
+    {
+        "name": "get_error_taxonomy",
+        "description": "Return the error-type distribution across all sessions (permission_error, file_not_found, syntax_error, timeout, api_error, assertion_failure, unknown), with worst sessions and a weekly trend. Optionally filter by project or since date.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "optional project filter"},
+                "since": {"type": "string", "description": "optional YYYY-MM-DD lower bound"},
+            },
+        },
+        "handler": _t_get_error_taxonomy,
+    },
+    {
+        "name": "verify_claude_md",
+        "description": "Check whether a project's CLAUDE.md claims match actual session history. Each claim is scored verified / stale / unverifiable against the project's real tool calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_id": {"type": "string", "description": "project path or short name"}},
+            "required": ["project_id"],
+        },
+        "handler": _t_verify_claude_md,
+    },
+    {
+        "name": "search_by_error_type",
+        "description": "Find sessions containing errors of a specific taxonomy type, sorted by recency. Pairs with get_error_taxonomy.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "error_type": {"type": "string",
+                               "description": "one of: permission_error, file_not_found, syntax_error, timeout, api_error, assertion_failure, unknown"},
+                "limit": {"type": "integer", "description": "max results (default 20)"},
+            },
+            "required": ["error_type"],
+        },
+        "handler": _t_search_by_error_type,
+    },
+    {
+        "name": "get_budget_forecast",
+        "description": "Project end-of-month spend at the current pace, identify the biggest cost-driver project, how many sessions until the budget ceiling, and the most wasteful (expensive + low-health) spending pattern.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_get_budget_forecast,
     },
 ]
 

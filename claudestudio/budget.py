@@ -119,3 +119,91 @@ def budget_status(conn, now: _dt.datetime | None = None) -> dict:
         "days_remaining": days_remaining,
         "alert": alert,
     }
+
+
+# ---------------------------------------------------------------------------
+# spend forecasting (v0.6.2) — project where this pace lands, and where the
+# waste is. All deterministic, all from the local `sessions` table.
+# ---------------------------------------------------------------------------
+
+_FORECAST_WINDOW_DAYS = 30
+
+
+def forecast(conn, now: _dt.datetime | None = None) -> dict:
+    """Project end-of-month spend and surface the biggest cost driver & waste.
+
+    Based on the trailing 30 days of session cost:
+      * ``projected_month_usd`` — this month's spend if the current daily pace holds
+      * ``biggest_driver``      — the project that cost the most in the window
+      * ``sessions_until_limit``— how many average-cost sessions until the active
+                                  budget ceiling is hit (-1 when no budget is set)
+      * ``opportunity``         — the project with the worst cost-per-health-point
+                                  (expensive *and* low-health = the wasteful pattern)
+    """
+    now = now or _dt.datetime.now()
+    window_start = (now - _dt.timedelta(days=_FORECAST_WINDOW_DAYS)).timestamp()
+
+    rows = conn.execute(
+        "SELECT COALESCE(project_name, project, '(unknown)') p, "
+        "       COALESCE(cost_usd,0) c, COALESCE(health_score,0) h "
+        "FROM sessions WHERE last_epoch >= ? AND last_epoch < ?",
+        (window_start, now.timestamp()),
+    ).fetchall()
+
+    empty = {
+        "projected_month_usd": 0.0, "biggest_driver": "", "sessions_until_limit": -1,
+        "daily_rate_usd": 0.0, "window_days": _FORECAST_WINDOW_DAYS,
+        "window_sessions": 0,
+        "opportunity": {"project": "", "cost_per_health_point": 0.0,
+                        "avg_health": 0.0, "cost_usd": 0.0},
+    }
+    if not rows:
+        return empty
+
+    total_cost = sum(float(r["c"] or 0.0) for r in rows)
+    by_project: dict[str, dict] = {}
+    for r in rows:
+        p = r["p"]
+        d = by_project.setdefault(p, {"cost": 0.0, "health_sum": 0.0, "n": 0})
+        d["cost"] += float(r["c"] or 0.0)
+        d["health_sum"] += float(r["h"] or 0.0)
+        d["n"] += 1
+
+    daily = total_cost / _FORECAST_WINDOW_DAYS
+    _, _, days_in_month = _period_bounds("monthly", now)
+    days_in_month_total = days_in_month + now.day  # remaining + elapsed
+    projected_month = daily * days_in_month_total
+
+    biggest_driver = max(by_project, key=lambda k: (by_project[k]["cost"], k))
+
+    # cost-per-health-point: expensive sessions that scored low are the waste.
+    def _cphp(d: dict) -> float:
+        avg_health = (d["health_sum"] / d["n"]) if d["n"] else 0.0
+        return d["cost"] / max(1.0, avg_health)
+
+    worst = max(by_project, key=lambda k: (_cphp(by_project[k]), k))
+    wd = by_project[worst]
+    avg_health = round((wd["health_sum"] / wd["n"]) if wd["n"] else 0.0, 1)
+
+    # sessions until the active ceiling is hit, at the window's average cost.
+    sessions_until = -1
+    status = budget_status(conn, now)
+    if status["has_budget"] and status["ceiling_usd"] > 0:
+        avg_cost = total_cost / len(rows) if rows else 0.0
+        remaining = max(0.0, status["remaining_usd"])
+        sessions_until = int(remaining / avg_cost) if avg_cost > 0 else -1
+
+    return {
+        "projected_month_usd": round(projected_month, 2),
+        "biggest_driver": biggest_driver,
+        "sessions_until_limit": sessions_until,
+        "daily_rate_usd": round(daily, 4),
+        "window_days": _FORECAST_WINDOW_DAYS,
+        "window_sessions": len(rows),
+        "opportunity": {
+            "project": worst,
+            "cost_per_health_point": round(_cphp(wd), 4),
+            "avg_health": avg_health,
+            "cost_usd": round(wd["cost"], 4),
+        },
+    }

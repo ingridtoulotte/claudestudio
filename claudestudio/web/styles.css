@@ -812,3 +812,33 @@ mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 
 .dev-line { white-space: pre-wrap; color: var(--text-2); }
 .dev-line.good { color: #5ec98a; }
 .dev-line.bad { color: #ff6b6b; font-weight: 600; }
+
+/* === v0.6.2 Insight Engine: resume / compare modal / trace / cards ======== */
+.cs-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px; z-index: 80; }
+.cs-modal { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; width: min(560px, 96vw); max-height: 80vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.cs-compare-modal { width: min(620px, 96vw); }
+.cs-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.cs-modal-head h3 { margin: 0; font-size: 15px; }
+.cs-modal-x { background: none; border: 0; color: var(--text-2); font-size: 22px; cursor: pointer; line-height: 1; }
+.cs-modal-body { padding: 12px 18px 18px; display: flex; flex-direction: column; gap: 8px; }
+.cs-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left; }
+.cs-pick:hover { border-color: var(--accent); }
+.cs-pick-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-pick-meta { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.cs-cmp-verdict { font-size: 14px; line-height: 1.5; padding: 10px 12px; background: var(--surface-2); border-radius: 9px; border-left: 3px solid var(--accent); }
+.cs-cmp-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 4px; border-bottom: 1px dashed var(--line); }
+.cs-trace-tree { margin-top: 18px; padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; }
+.cs-trace-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cs-trace-node { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; padding: 3px 0 3px 14px; border-left: 2px solid var(--line); color: var(--text-2); }
+.cs-trace-node.prompt { color: var(--text); border-left-color: var(--accent); font-weight: 600; }
+.cs-trace-node.err { color: #ff6b6b; border-left-color: #ff6b6b; }
+.cs-trace-node.outcome { color: #5ec98a; border-left-color: #5ec98a; }
+.cs-trace-tool { font-weight: 600; }
+.errors-card .errors-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 2px; border-bottom: 1px dashed var(--line); }
+.errors-type { font-family: var(--mono); font-size: 12.5px; }
+.errors-count { font-weight: 700; color: #ff6b6b; }
+.forecast-card .forecast-big { font-size: 30px; font-weight: 800; color: var(--accent); }
+.forecast-card .forecast-sub { color: var(--text-2); font-size: 12px; margin-bottom: 8px; }
+.forecast-card .forecast-row { padding: 4px 0; font-size: 13px; }
+.cs-copy-fallback { position: fixed; left: -9999px; top: -9999px; opacity: 0; }
+.cs-pick:focus-visible, .cs-modal-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

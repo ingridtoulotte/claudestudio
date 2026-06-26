@@ -414,6 +414,28 @@ def cmd_highlights(args):
     return 0
 
 
+def _doctor_recommendation(*, hooks, hook_installed, error_rate, stale_pricing,
+                           n_sessions) -> str:
+    """One sentence: the single most impactful thing the user could do next.
+
+    Pure function of the gathered signals (deterministic) so the self-test can
+    pin its behaviour on known inputs."""
+    if n_sessions == 0:
+        return "Run `claudestudio index` (or `claudestudio demo`) to populate your index."
+    if error_rate.get("change_pct", 0) >= 30 and error_rate.get("errors", 0) > 0:
+        return (f"Your error rate rose {error_rate['change_pct']:.0f}% this week — "
+                f"open the Errors dashboard to see what's failing.")
+    if not hook_installed:
+        return ("Install the post-session hook (`claudestudio hook install`) so your "
+                "index stays fresh automatically.")
+    if stale_pricing:
+        return "Upgrade ClaudeStudio to refresh the bundled pricing table for accurate costs."
+    if not hooks:
+        return ("Wire a local webhook (`claudestudio webhook --add …`) to get alerts in "
+                "your own tools.")
+    return "Everything looks healthy — try `claudestudio resume --last` to jump back in."
+
+
 def cmd_doctor(args):
     """Diagnose environment & index health. Exit 0 healthy, 1 warnings, 2 critical."""
     print(BANNER)
@@ -515,6 +537,29 @@ def cmd_doctor(args):
             from . import benchmark
             verdict = benchmark.compute_benchmark(conn, "week")["verdict"]
             print(f"  benchmark     : {verdict}")
+
+            # --- v0.6.2: Insight Engine status ---
+            from . import error_taxonomy, webhooks
+            hooks = webhooks.list_webhooks(conn)
+            print(f"  webhooks      : {len(hooks)} configured")
+
+            # resume readiness — a recent session means `resume --last` works
+            recent = conn.execute(
+                "SELECT session_id FROM sessions ORDER BY last_epoch DESC LIMIT 1"
+            ).fetchone()
+            n_sessions = s["sessions"]
+            print(f"  resume ready  : {'yes' if recent else 'no'} "
+                  f"(compare needs ≥2 — have {n_sessions})")
+
+            er = error_taxonomy.error_rate(conn, days=7)
+            print(f"  error rate 7d : {er['errors']} errors over {er['sessions']} "
+                  f"sessions ({er['per_session']}/session, {er['change_pct']:+.0f}% vs prior)")
+
+            # one-line "biggest lever" recommendation
+            rec = _doctor_recommendation(
+                hooks=hooks, hook_installed=hst["installed"], error_rate=er,
+                stale_pricing=pricing.is_price_table_stale(), n_sessions=n_sessions)
+            print(f"\n  ➤ Top recommendation: {rec}")
         finally:
             conn.close()
     else:
@@ -1064,6 +1109,220 @@ def cmd_benchmark(args):
     return 0
 
 
+def cmd_resume(args):
+    """Print a copy-paste-ready brief to resume a session in a new window."""
+    from . import resume
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        data = resume.build_brief(conn, sid)
+    finally:
+        conn.close()
+    if data.get("error"):
+        print(f"  ✗ {data['error']}: {sid}", file=sys.stderr)
+        return 1
+    brief = data["brief"]
+    if args.out:
+        dest = _safe_out_path(args.out, "claudestudio-resume.txt")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(brief + "\n")
+        print(f"  resume brief → {dest}")
+    else:
+        print("\n" + brief + "\n")
+    if args.copy:
+        if _copy_to_clipboard(brief):
+            print("  ✓ copied to clipboard")
+        else:
+            print("  (clipboard unavailable — copy the text above)", file=sys.stderr)
+    return 0
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Best-effort copy via the OS clipboard tool. Never raises; False if absent."""
+    import shutil
+    import subprocess
+    if os.name == "nt":
+        candidates = [["clip"]]
+    elif sys.platform == "darwin":
+        candidates = [["pbcopy"]]
+    else:
+        candidates = [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "-b"]]
+    for cmd in candidates:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
+def resolve_open_url(conn, *, session_id=None, last=False, starred=False,
+                     query=None, port=8787) -> str | None:
+    """Build the localhost URL to open for the requested mode, or None if there is
+    nothing to open. Pure (no I/O beyond the index read) so the self-test can pin
+    every mode's URL."""
+    from urllib.parse import quote
+    base = f"http://localhost:{int(port)}"
+    if query:
+        return f"{base}/?q={quote(str(query))}"
+    sid = session_id
+    if last and not sid:
+        sid = _last_session_id(conn)
+    if starred and not sid:
+        row = conn.execute(
+            "SELECT s.session_id FROM sessions s JOIN user_state u USING(session_id) "
+            "WHERE u.favorite=1 ORDER BY s.last_epoch DESC, s.session_id ASC LIMIT 1"
+        ).fetchone()
+        sid = row["session_id"] if row else None
+    if not sid and not (session_id or last or starred):
+        sid = _last_session_id(conn)
+    if not sid:
+        return None
+    return f"{base}/session/{quote(str(sid))}"
+
+
+def cmd_open(args):
+    """Open a session (or a pre-filled search) in the browser; start the server
+    if it isn't already running."""
+    import webbrowser
+    conn = index.connect(args.db)
+    try:
+        url = resolve_open_url(
+            conn, session_id=args.session_id, last=args.last,
+            starred=args.starred, query=args.query, port=args.port)
+    finally:
+        conn.close()
+    if url is None:
+        print("  No matching session to open.", file=sys.stderr)
+        return 1
+    # Start the server in the background if the port looks closed.
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        running = sock.connect_ex(("127.0.0.1", args.port)) == 0
+    if not running:
+        import threading
+        roots = _split_roots(args.root)
+        conn2 = index.connect(args.db)
+        try:
+            index.reindex(conn2, roots)
+        finally:
+            conn2.close()
+        t = threading.Thread(
+            target=server.serve,
+            kwargs={"db_path": args.db, "projects_root": roots,
+                    "port": args.port, "open_browser": False},
+            daemon=True)
+        t.start()
+        time.sleep(1.0)
+    print(f"  opening {url}")
+    webbrowser.open(url)
+    if not running:
+        print("  (server started in this process — press Ctrl+C to stop)")
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            print("\n  Stopped.")
+    return 0
+
+
+def cmd_compare(args):
+    """Print a structured diff of two sessions."""
+    from . import compare as compare_mod
+    conn = index.connect(args.db)
+    try:
+        data = compare_mod.compare_sessions(conn, args.session_a, args.session_b)
+    finally:
+        conn.close()
+    if data.get("error"):
+        print(f"  ✗ {data['error']}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+    a, b = data["a"], data["b"]
+    print(BANNER)
+    print(f"  A  {a['title'][:54]:<54}  ${a['cost_usd']:.4f}  health {a['health_score']}")
+    print(f"  B  {b['title'][:54]:<54}  ${b['cost_usd']:.4f}  health {b['health_score']}\n")
+    print(f"  cost Δ    ${data['cost_delta_usd']:+.4f}")
+    print(f"  tokens Δ  {data['token_delta']:+,}")
+    print(f"  health Δ  {data['health_delta']:+d}")
+    if data["shared_files"]:
+        print(f"  shared    {', '.join(data['shared_files'][:8])}")
+    print(f"\n  {data['verdict']}\n")
+    return 0
+
+
+def cmd_verify_claude_md(args):
+    """Verify a project's CLAUDE.md against its session history."""
+    from . import verify_claude_md as vmod
+    conn = index.connect(args.db)
+    try:
+        project = args.project
+        if not project:
+            row = conn.execute(
+                "SELECT project_name FROM sessions ORDER BY last_epoch DESC LIMIT 1"
+            ).fetchone()
+            project = row["project_name"] if row else ""
+        data = vmod.verify(conn, project)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+    print(BANNER)
+    if not data.get("claude_md_found"):
+        print(f"  {data.get('note', 'no CLAUDE.md found')}: {project}")
+        return 0
+    icon = {"verified": "✅", "stale": "⚠️ ", "unverifiable": "❓"}
+    print(f"  CLAUDE.md for {project}  —  score {data['overall_score']:.0%} "
+          f"({data['verified']}/{data['total']} verified)\n")
+    for c in data["claims"]:
+        print(f"  {icon.get(c['status'], '·')} {c['text'][:70]}")
+        print(f"        {c['evidence']}")
+    return 0
+
+
+def cmd_webhook(args):
+    """Manage local/LAN webhook notifications."""
+    from . import webhooks
+    conn = index.connect(args.db)
+    try:
+        if args.add:
+            try:
+                hook = webhooks.add_webhook(conn, args.add, args.events)
+            except ValueError as exc:
+                print(f"  ✗ {exc}", file=sys.stderr)
+                return 1
+            print(f"  ✓ webhook {hook['id'][:8]} → {hook['url']}  "
+                  f"[{', '.join(hook['events'])}]")
+            return 0
+        if args.remove:
+            res = webhooks.remove_webhook(conn, args.remove)
+            print("  ✓ removed" if res["removed"] else "  (no matching webhook)")
+            return 0 if res["removed"] else 1
+        hooks = webhooks.list_webhooks(conn)
+        print(BANNER)
+        if not hooks:
+            print("  No webhooks. Add one:  claudestudio webhook --add "
+                  "http://localhost:9000/hook --events session_indexed")
+            return 0
+        print(f"  {len(hooks)} webhook(s):\n")
+        for h in hooks:
+            print(f"    {h['id'][:8]}  {h['url']}  [{', '.join(h.get('events', []))}]")
+        return 0
+    finally:
+        conn.close()
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -1305,6 +1564,51 @@ def build_parser():
                    help="comparison period (default week)")
     p.add_argument("--json", action="store_true", help="raw JSON output")
     p.set_defaults(func=cmd_benchmark)
+
+    # --- v0.6.2 commands (Insight Engine) ---
+    p = sub.add_parser("resume",
+                       help="copy-paste brief to resume a session in a new window")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", help="session id (or use --last)")
+    p.add_argument("--last", action="store_true", help="resume the most recent session")
+    p.add_argument("--copy", action="store_true", help="copy the brief to the clipboard")
+    p.add_argument("--out", default=None, help="write the brief to a file")
+    p.set_defaults(func=cmd_resume)
+
+    p = sub.add_parser("open", help="open a session (or search) in the browser")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", help="session id to open")
+    p.add_argument("--last", action="store_true", help="open the most recent session")
+    p.add_argument("--starred", action="store_true", help="open the most recent starred session")
+    p.add_argument("--query", default=None, help="open search pre-filled with this text")
+    p.add_argument("--port", type=int, default=8787, help="server port (default 8787)")
+    p.set_defaults(func=cmd_open)
+
+    p = sub.add_parser("compare", help="structured diff between two sessions")
+    _add_common(p)
+    p.add_argument("session_a", help="first session id")
+    p.add_argument("session_b", help="second session id")
+    p.add_argument("--json", action="store_true", help="raw JSON output")
+    p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("verify-claude-md",
+                       help="check a project's CLAUDE.md against its session history")
+    _add_common(p)
+    p.add_argument("--project", default=None, help="project name/path (default: most recent)")
+    p.add_argument("--json", action="store_true", help="raw JSON output")
+    p.set_defaults(func=cmd_verify_claude_md)
+
+    p = sub.add_parser("webhook", help="manage local/LAN webhook notifications")
+    _add_common(p)
+    p.add_argument("--add", default=None, metavar="URL",
+                   help="register a local/LAN webhook URL")
+    p.add_argument("--events", default=None,
+                   help="comma-separated events (session_indexed,budget_alert,"
+                        "health_alert,watch_new)")
+    p.add_argument("--remove", default=None, metavar="URL_OR_ID",
+                   help="remove a webhook by URL or id")
+    p.add_argument("--list", action="store_true", help="list webhooks (default)")
+    p.set_defaults(func=cmd_webhook)
 
     return ap
 

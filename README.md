@@ -16,8 +16,9 @@ Explore, search, replay, and understand every Claude Code session — all on you
 [![Changelog](https://img.shields.io/badge/changelog-read-9a8cff)](CHANGELOG.md)
 [![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-9a8cff)](https://claude.ai/code)
 ![Plugins](https://img.shields.io/badge/plugins-extensible-9a8cff)
-![Self-test](https://img.shields.io/badge/self--test-620%2B%20checks-5ec98a)
-![MCP Tools](https://img.shields.io/badge/MCP%20tools-20-9a8cff)
+![Self-test](https://img.shields.io/badge/self--test-729%2B%20checks-5ec98a)
+![MCP Tools](https://img.shields.io/badge/MCP%20tools-26-9a8cff)
+![Schema](https://img.shields.io/badge/schema-v6-9a8cff)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
@@ -71,6 +72,47 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - 📦 **Static share pack** — share any session as a self-contained `.html` file. No server, no upload. *(new in v0.6.1)*
 - 📊 **Benchmark** — week-over-week and month-over-month efficiency comparison with trend arrows. *(new in v0.6.1)*
 - 🔌 **Plugin API** — drop a `.py` into `~/.claudestudio/plugins/` to extend ClaudeStudio. *(new in v0.6.1)*
+- 📋 **Session resume briefs** — `claudestudio resume --last` (or press `R`) builds a copy-paste-ready context block to pick up exactly where you left off in a *new* Claude Code window. *(new in v0.6.2)*
+- ⚖️ **Session comparison** — diff any two sessions (cost, tokens, health, prompts, files) with a plain-English verdict on which approach was better. Press `C`. *(new in v0.6.2)*
+- ⚠️ **Error taxonomy** — every tool error is classified (`permission_error`, `file_not_found`, `syntax_error`, `timeout`, `api_error`, `assertion_failure`) into an errors dashboard with a week-over-week trend. *(new in v0.6.2)*
+- 🧬 **Prompt-to-outcome trace** — a collapsible causal tree (prompt → tools → files → errors → outcome) for any prompt. Press `X`. *(new in v0.6.2)*
+- 🔔 **Local webhooks** — POST alerts to a loopback/LAN URL on new sessions, budget alerts, or low health — RFC-1918 enforced so data never leaves your network. *(new in v0.6.2)*
+- ✅ **CLAUDE.md verification** — `claudestudio verify-claude-md` scores each claim in your `CLAUDE.md` against what Claude Code actually did (✅ verified / ⚠️ stale / ❓ unverifiable). *(new in v0.6.2)*
+- 📈 **Budget forecasting** — project end-of-month spend at the current pace, the biggest cost driver, and the most wasteful (expensive + low-health) pattern. *(new in v0.6.2)*
+
+---
+
+## 🆕 What's new in v0.6.2
+
+The **Insight Engine** release — ClaudeStudio stops being just a recorder of your history and becomes an active intelligence layer that surfaces what matters, prevents waste, and accelerates your next session. Schema migrates in place to **v6**; self-test **623 → 729**; MCP **20 → 26 tools**. Still 100% local, zero dependencies, deterministic.
+
+- **`claudestudio resume`** — a context-rich handoff brief (last tool calls + results, recent errors, uncommitted files via `git status`, branch/SHA, open questions) wrapped in a `CONTEXT FOR NEW SESSION` block. One keystroke (`R`) copies it to your clipboard.
+
+  ```console
+  $ claudestudio resume --last
+  === CONTEXT FOR NEW SESSION ===
+  Resuming work from a previous Claude Code session: Refactor auth middleware to async
+  Project: /home/dev/orbit-api   ·   Git: branch feat/async @ 4f31a2c
+  Most recent actions:  ✓ Edit — auth.py   ✗ Bash — pytest (2 failed)
+  Open questions / where I left off:  - should the token refresh be idempotent?
+  === END CONTEXT ===
+  ✓ copied to clipboard
+  ```
+
+- **Session comparison** — `claudestudio compare <A> <B>` (or `C` in the UI):
+
+  ```console
+  $ claudestudio compare 8f2c… 1ab7…
+  cost Δ    -$0.0143
+  tokens Δ  -48,210
+  health Δ  +12
+  Session B was 31% cheaper and a higher tool-success rate — probably a better approach.
+  ```
+
+- **Error taxonomy** — `get_error_taxonomy` (MCP) / the Errors card in Analytics: top error types, which projects trigger the most, the worst sessions, and a 12-week trend.
+- **Outcome trace**, **local webhooks**, **CLAUDE.md verification**, and **budget forecasting** round out the release. Six new MCP tools expose all of it to Claude Code itself.
+
+> **Upgrade note:** the index migrates `v5 → v6` in place on first open (adds the derived `session_errors` table; no data loss). An older ClaudeStudio opening a v6 index fails loudly with a clear version-mismatch message rather than reading the wrong schema.
 
 ---
 
@@ -356,25 +398,28 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 
 ## 🆚 Why ClaudeStudio
 
-|                               | Raw `.jsonl` logs | `cat` / `grep` | Generic log viewer | Claudia (Tauri GUI) | **ClaudeStudio** |
-|-------------------------------|:-----------------:|:--------------:|:------------------:|:-------------------:|:----------------:|
-| Browse & sort sessions        | ❌                | ⚠️ manual      | ⚠️                 | ✅                  | ✅               |
-| Full-text search w/ ranking   | ❌                | ⚠️ line-by-line| ⚠️                 | ⚠️                  | ✅ FTS5 + BM25   |
-| Chronological replay          | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
-| Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
-| Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ✅ deterministic |
-| Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 20 tools      |
-| Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| Inline file diffs in replay   | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
-| Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| Budget tracking & spend alerts| ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| Session health scoring        | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| Keyboard navigation           | ❌                | ❌             | ⚠️                 | ⚠️                  | ✅               |
-| Message bookmarks + deep links| ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| 100% local, no telemetry      | ✅                | ✅             | ⚠️                 | ✅                  | ✅               |
-| **No install / no toolchain** | —                 | ✅             | ❌                 | ❌ (Rust/Tauri)     | ✅ `pipx run`    |
-| Zero dependencies             | —                 | ✅             | ❌                 | ❌                  | ✅ stdlib only   |
+|                               | Raw `.jsonl` logs | `cat` / `grep` | Generic log viewer | Claudia (Tauri GUI) | Claude Code native | **ClaudeStudio** |
+|-------------------------------|:-----------------:|:--------------:|:------------------:|:-------------------:|:------------------:|:----------------:|
+| Browse & sort sessions        | ❌                | ⚠️ manual      | ⚠️                 | ✅                  | ❌                 | ✅               |
+| Full-text search w/ ranking   | ❌                | ⚠️ line-by-line| ⚠️                 | ⚠️                  | ❌                 | ✅ FTS5 + BM25   |
+| Chronological replay          | ❌                | ❌             | ❌                 | ⚠️                  | ❌                 | ✅               |
+| Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ❌                 | ✅               |
+| Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ❌                 | ✅ deterministic |
+| Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ 26 tools      |
+| Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| Budget tracking & spend alerts| ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| Session health scoring        | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| **Resume brief** (handoff)    | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.2)*    |
+| **Session comparison**        | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.2)*    |
+| **Error taxonomy**            | ❌                | ❌             | ⚠️                 | ❌                  | ❌                 | ✅ *(v0.6.2)*    |
+| **Webhook notifications** (local)| ❌             | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.2)*    |
+| Keyboard navigation           | ❌                | ❌             | ⚠️                 | ⚠️                  | ❌                 | ✅               |
+| Message bookmarks + deep links| ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
+| 100% local, no telemetry      | ✅                | ✅             | ⚠️                 | ✅                  | ✅                 | ✅               |
+| **No install / no toolchain** | —                 | ✅             | ❌                 | ❌ (Rust/Tauri)     | —                  | ✅ `pipx run`    |
+| Zero dependencies             | —                 | ✅             | ❌                 | ❌                  | —                  | ✅ stdlib only   |
 
 ---
 
@@ -459,10 +504,17 @@ python -m claudestudio [command]
   share          export session as shareable HTML   <session_id> [--out FILE] [--no-annotations]
   benchmark      week/month/quarter efficiency report  --mode week|month|quarter --json
   tag            manage session tags                --add NAME [--colour HEX] | --list
-  --selftest     run the built-in correctness suite (623 checks, no deps)
+  resume         copy-paste brief to resume a session  <session_id> | --last [--copy] [--out FILE]
+  open           open a session/search in the browser  <session_id> | --last | --starred | --query TEXT
+  compare        structured diff between two sessions   <session_a> <session_b> [--json]
+  verify-claude-md  check a CLAUDE.md against history    --project NAME [--json]
+  webhook        manage local/LAN webhook notifications --add URL --events … | --remove URL | --list
+  --selftest     run the built-in correctness suite (729 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
+
+**Keyboard shortcuts** (in the app): `R` copy a resume brief · `C` compare with another session · `X` toggle the prompt-to-outcome trace · `/` search · `s` star · `e` export · `T` cycle theme · `?` full cheat sheet.
 
 ```bash
 python -m claudestudio ask "what should I reopen next?"   # grounded, no model calls
@@ -522,10 +574,16 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] Static share pack (self-contained HTML, no upload) — _v0.6.1_
 - [x] Benchmark (week/month/quarter efficiency trends) — _v0.6.1_
 - [x] Plugin API foundations (~/.claudestudio/plugins/) — _v0.6.1_
-- [ ] Tauri native window + signed installers (`.dmg`, `.msi`)
+- [x] **Session resume briefs** (one-keystroke handoff to a new window) — _v0.6.2_
+- [x] **Session comparison** (cost/token/health/prompt/file diff + verdict) — _v0.6.2_
+- [x] **Error taxonomy** & recurring-error dashboard — _v0.6.2_
+- [x] **Prompt-to-outcome tracing** — _v0.6.2_
+- [x] **Local/LAN webhooks** (RFC-1918 enforced) — _v0.6.2_
+- [x] **CLAUDE.md verification** against real history — _v0.6.2_
+- [x] **Budget forecasting** (end-of-month projection + waste finder) — _v0.6.2_
+- [ ] **Next milestone:** Tauri native window + signed installers (`.dmg`, `.msi`)
 - [ ] Homebrew formula (`brew install claudestudio`)
 - [ ] VS Code extension with session deep-link support
-- [ ] Webhook / push notification system (budget alerts, session completion)
 - [ ] Public session sharing (opt-in, locally encrypted link, no cloud backend)
 - [ ] i18n foundations (extractable string table)
 - [ ] Team/org mode (shared read-only index over local network)
@@ -549,6 +607,16 @@ or build on top of the HTTP API. See [docs/API.md](docs/API.md) for the full ref
 - 📋 [Changelog](CHANGELOG.md)
 - 🗺 [Roadmap](#-roadmap)
 
+### Built for the Claude Code ecosystem
+
+ClaudeStudio is **infrastructure for the Claude Code community**, not a toy viewer:
+
+- **A reference parser for the Claude Code wire format.** `from claudestudio import parse_session` gives any builder a faithful, self-test-pinned reader of the `.jsonl` session format — import it instead of reverse-engineering it ([`docs/FORMAT.md`](docs/FORMAT.md)).
+- **Composable via MCP.** The 26-tool MCP server makes ClaudeStudio queryable *by Claude Code itself* — your history becomes a first-class context source for your next session.
+- **Serves the entire Claude Code user base.** Anyone who runs Claude Code generates the sessions ClaudeStudio understands. It is the only zero-dependency, local-first session workspace for the tool.
+
+ClaudeStudio was built to support the **[Anthropic Claude for Open Source](https://claude.com/contact-sales/claude-for-oss)** program's vision of thriving OSS tooling around Claude Code. If ClaudeStudio is useful to you, the most impactful thing you can do is **⭐ star the repo, use it daily, and open a PR** — that's how a quietly-depended-on tool earns its place.
+
 ---
 
 ## 📚 Citing ClaudeStudio
@@ -560,7 +628,7 @@ If you use ClaudeStudio in your work, you can cite it via [`CITATION.cff`](CITAT
   author  = {Toulotte, Ingrid},
   title   = {ClaudeStudio},
   url     = {https://github.com/ingridtoulotte/claudestudio},
-  version = {0.5.1}
+  version = {0.6.2}
 }
 ```
 
@@ -572,6 +640,24 @@ If you use ClaudeStudio in your work, you can cite it via [`CITATION.cff`](CITAT
 <summary><b>Does any of my data leave my machine?</b></summary>
 
 No. ClaudeStudio reads `~/.claude/projects` locally, builds a SQLite index on disk, and serves the UI from `127.0.0.1`. There are zero outbound network calls — `grep -r http claudestudio/` and see for yourself.
+</details>
+
+<details>
+<summary><b>What is the resume brief?</b></summary>
+
+`claudestudio resume --last` (or press `R` in the app) generates a copy-paste-ready **`CONTEXT FOR NEW SESSION`** block: the last few tool calls and their results, recent errors, your uncommitted files (via `git status`, gracefully skipped outside a repo), the current branch/SHA, and the open questions from the tail of the session. Paste it into a fresh Claude Code window to pick up exactly where you left off. Deterministic and 100% local.
+</details>
+
+<details>
+<summary><b>Can I compare two sessions?</b></summary>
+
+Yes — `claudestudio compare <A> <B>` (or `C` in the session view) produces a structured diff: cost / token / health deltas, prompts unique to each side, files touched by both, and a plain-English verdict ("Session B was 31% cheaper and had a higher tool-success rate — probably a better approach"). No model calls; every number comes from the local index.
+</details>
+
+<details>
+<summary><b>How do webhooks work — is my data still local?</b></summary>
+
+Webhooks POST a small JSON payload to a URL **you** configure when a new session is indexed, a budget threshold is crossed, or a session's health drops. Locality is enforced in code: a URL whose host is not loopback or a private-range IP (`127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, or `localhost`) is **rejected outright** — so a webhook can pipe alerts into a local Slack bot or Home Assistant, but can never exfiltrate data to the public internet. The check is re-validated at send time and covered by the self-test.
 </details>
 
 <details>

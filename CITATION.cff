@@ -8,7 +8,7 @@ authors:
 repository-code: "https://github.com/ingridtoulotte/claudestudio"
 url: "https://github.com/ingridtoulotte/claudestudio"
 license: MIT
-version: "0.6.1"
+version: "0.6.2"
 keywords:
   - claude-code
   - mcp

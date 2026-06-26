@@ -38,7 +38,12 @@ from .parser import ParsedSession
 # (a personal, starrable prompt collection). The migration adds the column in
 # place; the tables are created by the schema script with IF NOT EXISTS. All
 # indexed data and user state is preserved.
-SCHEMA_VERSION = 3
+# v4 (v0.6.0): a `session_github_refs` table holds the GitHub issue/PR references
+# detected in each session (#123, owner/repo#456, full URLs). It is rebuilt from
+# the source on (re)index — derived data, not user state — so an old index simply
+# starts empty and fills in on the next reindex. The migration only creates the
+# table (schema script, IF NOT EXISTS) and bumps the version; no data is lost.
+SCHEMA_VERSION = 4
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -206,6 +211,23 @@ CREATE TABLE IF NOT EXISTS prompt_library (
     starred    INTEGER DEFAULT 0,
     created_at REAL
 );
+
+-- GitHub issue/PR references found in a session (#123, owner/repo#456, full URLs).
+-- Derived data (rebuilt on reindex, keyed by session), NOT user state.
+CREATE TABLE IF NOT EXISTS session_github_refs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT,
+    seq         INTEGER,
+    ref         TEXT,
+    owner       TEXT,
+    repo        TEXT,
+    number      INTEGER,
+    kind        TEXT,
+    url         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ghrefs_session ON session_github_refs(session_id);
+CREATE INDEX IF NOT EXISTS idx_ghrefs_number  ON session_github_refs(number);
+CREATE INDEX IF NOT EXISTS idx_ghrefs_repo    ON session_github_refs(owner, repo);
 """
 
 
@@ -272,6 +294,9 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     sess_cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
     if "health_score" not in sess_cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN health_score INTEGER")
+    # v4: session_github_refs is created by the schema script (IF NOT EXISTS) and
+    # populated lazily on the next reindex (it's derived data, never user state),
+    # so there is nothing to migrate beyond recording the version below.
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -307,6 +332,7 @@ def _delete_session(conn, session_id: str) -> None:
     conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM tool_calls WHERE session_id=?", (session_id,))
     conn.execute("DELETE FROM search_fts WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM session_github_refs WHERE session_id=?", (session_id,))
 
 
 def _insert_session(conn, ps: ParsedSession) -> None:
@@ -390,6 +416,21 @@ def _insert_session(conn, ps: ParsedSession) -> None:
         "INSERT INTO search_fts(body,session_id,message_uuid,seq,kind) VALUES (?,?,?,?,?)",
         fts_rows,
     )
+
+    # v4: detect + store GitHub issue/PR references (derived data; rebuilt here
+    # on every (re)index). Imported lazily to avoid any import cycle.
+    from . import github_linker
+    gh_rows = [
+        (ps.session_id, ref["seq"], ref["ref"], ref["owner"], ref["repo"],
+         ref["number"], ref["kind"], ref["url"])
+        for ref in github_linker.extract_from_session(ps)
+    ]
+    if gh_rows:
+        conn.executemany(
+            "INSERT INTO session_github_refs"
+            "(session_id,seq,ref,owner,repo,number,kind,url) VALUES (?,?,?,?,?,?,?,?)",
+            gh_rows,
+        )
 
 
 def normalize_roots(root) -> list[str]:
@@ -809,3 +850,50 @@ def delete_prompt(conn, prompt_id) -> dict:
     cur = conn.execute("DELETE FROM prompt_library WHERE id=?", (str(prompt_id),))
     conn.commit()
     return {"deleted": cur.rowcount > 0, "id": prompt_id}
+
+
+# ---------------------------------------------------------------------------
+# GitHub references  (derived data — rebuilt on reindex, Feature 2.10)
+# ---------------------------------------------------------------------------
+
+def github_refs_for_session(conn, session_id: str) -> list[dict]:
+    """Every GitHub issue/PR reference detected in one session (by message order)."""
+    rows = conn.execute(
+        "SELECT seq, ref, owner, repo, number, kind, url "
+        "FROM session_github_refs WHERE session_id=? ORDER BY seq, number",
+        (session_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def search_github_refs(conn, *, number=None, repo: str = "", owner: str = "",
+                       limit: int = 100) -> list[dict]:
+    """Find the sessions that referenced a given issue/PR number and/or repo.
+
+    Filters are AND-combined; all optional. ``repo`` matches the repo name and
+    ``owner`` the owner; ``number`` the issue/PR number. Returns one row per
+    (session, ref) with the session title for deep-linking. Deterministic order.
+    """
+    where: list = ["1=1"]
+    args: list = []
+    if number is not None:
+        try:
+            where.append("g.number=?")
+            args.append(int(number))
+        except (TypeError, ValueError):
+            return []
+    if repo:
+        where.append("LOWER(g.repo)=?")
+        args.append(str(repo).lower())
+    if owner:
+        where.append("LOWER(g.owner)=?")
+        args.append(str(owner).lower())
+    rows = conn.execute(
+        f"SELECT g.session_id, g.seq, g.ref, g.owner, g.repo, g.number, g.kind, g.url, "
+        f"       COALESCE(s.title,'') AS session_title, COALESCE(s.last_epoch,0) AS last_epoch "
+        f"FROM session_github_refs g LEFT JOIN sessions s USING(session_id) "
+        f"WHERE {' AND '.join(where)} "
+        f"ORDER BY s.last_epoch DESC, g.session_id, g.seq LIMIT ?",
+        (*args, max(1, int(limit))),
+    ).fetchall()
+    return [dict(r) for r in rows]

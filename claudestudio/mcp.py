@@ -190,6 +190,25 @@ def _t_generate_project_brief(conn, args: dict) -> dict:
     return api.project_brief(conn, pid)
 
 
+# --- v0.6.0 tools (#15, #16) -----------------------------------------------
+
+def _t_get_cross_refs(conn, args: dict) -> dict:
+    """Prompts that reference an earlier session, with candidate target sessions."""
+    return api.cross_refs(conn, {"limit": args.get("limit", 50)})
+
+
+def _t_find_sessions_by_github_ref(conn, args: dict) -> dict:
+    """Sessions that discussed a given GitHub issue/PR (#123, owner/repo#456)."""
+    params = {}
+    if args.get("ref"):
+        params["q"] = str(args["ref"])
+    if args.get("number") is not None:
+        params["q"] = "#" + str(args["number"])
+    if args.get("repo"):
+        params["repo"] = str(args["repo"])
+    return api.github_refs_search(conn, params)
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -345,6 +364,30 @@ TOOLS = [
             "required": ["project_id"],
         },
         "handler": _t_generate_project_brief,
+    },
+    {
+        "name": "get_cross_refs",
+        "description": "Find prompts where the user referenced an earlier session ('as we did last time', 'like in the refactor session') and the candidate sessions they likely meant. Use this to recover the thread a user is mentally continuing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "max references (default 50)"},
+            },
+        },
+        "handler": _t_get_cross_refs,
+    },
+    {
+        "name": "find_sessions_by_github_ref",
+        "description": "Find sessions that discussed a specific GitHub issue or PR. Accepts a ref like '#123' or 'owner/repo#456', or a number + repo. Read-only; no GitHub API calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "e.g. '#123' or 'owner/repo#456'"},
+                "number": {"type": "integer", "description": "issue/PR number"},
+                "repo": {"type": "string", "description": "optional 'owner/repo' or 'repo' filter"},
+            },
+        },
+        "handler": _t_find_sessions_by_github_ref,
     },
 ]
 

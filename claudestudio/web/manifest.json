@@ -1,0 +1,15 @@
+{
+  "name": "ClaudeStudio",
+  "short_name": "ClaudeStudio",
+  "description": "The desktop workspace for Claude Code — explore, search, replay and understand every session, 100% locally.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1014",
+  "theme_color": "#9a8cff",
+  "orientation": "any",
+  "icons": [
+    { "src": "assets/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "assets/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

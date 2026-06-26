@@ -27,7 +27,7 @@ over the same query layer.
         │
         ├── server.py  → HTTP JSON API + static SPA (web/)        → browser UI
         ├── cli.py     → list / search / ask / export / highlights … → terminal
-        └── mcp.py     → JSON-RPC 2.0 over stdio (14 tools)       → Claude Code / MCP
+        └── mcp.py     → JSON-RPC 2.0 over stdio (16 tools)       → Claude Code / MCP
 ```
 
 The key invariant: **`server.py` is the only module that knows about HTTP**, and

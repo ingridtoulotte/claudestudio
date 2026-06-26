@@ -1,0 +1,28 @@
+name: Stale issues
+
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: "stale"
+          stale-pr-label: "stale"
+          exempt-issue-labels: "pinned,roadmap,good first issue"
+          exempt-pr-labels: "pinned,roadmap"
+          stale-issue-message: >
+            This issue has been automatically marked as stale. If it's still
+            relevant, please leave a comment to keep it open!
+          stale-pr-message: >
+            This pull request has been automatically marked as stale. Push an
+            update or leave a comment to keep it open.

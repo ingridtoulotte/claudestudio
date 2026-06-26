@@ -561,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 14, "mcp exposes 14 tools")
+        c.eq(len(tl["result"]["tools"]), 16, "mcp exposes 16 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -625,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.5.2", "package version bumped to 0.5.2")
-        c.eq(init["result"]["serverInfo"]["version"], "0.5.2", "mcp serverInfo is 0.5.2")
+        c.eq(claudestudio.__version__, "0.6.0", "package version bumped to 0.6.0")
+        c.eq(init["result"]["serverInfo"]["version"], "0.6.0", "mcp serverInfo is 0.6.0")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.5.2" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "14" in out, "cli info reports the 14 MCP tools")
+        c.ok("0.6.0" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "16" in out, "cli info reports the 16 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -1009,6 +1009,294 @@ def run() -> int:
              "multi-root index is at the current schema version")
         mrconn.close()
 
+        # =================================================================
+        # v0.6.0 features
+        # =================================================================
+        from . import changelog_draft, cross_ref, feed, init_wizard, prompt_score
+        from . import github_linker as ghl
+        from . import patterns as patmod2
+        from . import sync as syncmod
+
+        c.eq(index.SCHEMA_VERSION, 4, "schema version is 4 (github refs)")
+
+        # craft a session (real .jsonl → reindex) carrying GitHub refs + a
+        # cross-session reference phrase + a scoreable prompt.
+        def _wsession(root, proj, sid, ts, msgs):
+            d = os.path.join(root, proj)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, f"{sid}.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "ai-title", "aiTitle": f"S {sid}",
+                                     "sessionId": sid}) + "\n")
+                for obj in msgs:
+                    obj.setdefault("sessionId", sid)
+                    obj.setdefault("cwd", "/proj")
+                    obj.setdefault("timestamp", ts)
+                    fh.write(json.dumps(obj) + "\n")
+
+        vroot = os.path.join(tmp, "v6root")
+        _wsession(vroot, "proj", "old1", "2026-06-01T09:00:00Z", [
+            {"type": "user", "uuid": "o1", "parentUuid": None,
+             "message": {"role": "user", "content": "set up the auth middleware module"}},
+        ])
+        _wsession(vroot, "proj", "ghx", "2026-06-10T10:00:00Z", [
+            {"type": "user", "uuid": "gu1", "parentUuid": None,
+             "message": {"role": "user", "content":
+                         "fix the auth bug like we did last time, see #123 and "
+                         "acme/repo#7 and https://github.com/acme/repo/pull/9"}},
+            {"type": "assistant", "uuid": "ga1", "parentUuid": "gu1",
+             "message": {"role": "assistant", "model": "claude-opus-4-8",
+                         "content": [
+                             {"type": "tool_use", "id": "gt1", "name": "Edit",
+                              "input": {"file_path": "/proj/auth.py"}},
+                             {"type": "text", "text": "Fixed it."}],
+                         "usage": {"input_tokens": 500, "output_tokens": 1200}}},
+            {"type": "user", "uuid": "gu2", "parentUuid": "ga1",
+             "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "gt1", "is_error": False, "content": "ok"}]}},
+        ])
+        vdb = os.path.join(tmp, "v6.db")
+        vconn = index.connect(vdb)
+        index.reindex(vconn, vroot)
+
+        # --- 2.10: github refs stored at index time + searchable -----------
+        grefs = index.github_refs_for_session(vconn, "ghx")
+        nums = {r["number"] for r in grefs}
+        c.ok({123, 7, 9} <= nums, "github refs detected + stored at index time")
+        c.ok(any(r["kind"] == "pr" and r["number"] == 9 for r in grefs),
+             "the PR url is classified as a pr")
+        c.ok(any(r["owner"] == "acme" and r["repo"] == "repo" and r["number"] == 7 for r in grefs),
+             "owner/repo#n shorthand captures owner+repo")
+        hits = index.search_github_refs(vconn, number=123)
+        c.ok(any(h["session_id"] == "ghx" for h in hits), "search_github_refs finds the session by number")
+        c.eq(index.search_github_refs(vconn, number=99999), [],
+             "search_github_refs returns [] for an unreferenced number")
+        gsearch = api.github_refs_search(vconn, {"q": "acme/repo#7"})
+        c.ok(gsearch["results"] and gsearch["number"] == 7, "api github_refs_search parses owner/repo#n")
+        c.ok("github_refs" in api.get_session(vconn, "ghx"), "get_session attaches github_refs")
+        # github refs are derived data — rebuilt (not duplicated) on a forced reindex
+        index.reindex(vconn, vroot, force=True)
+        c.eq(len(index.github_refs_for_session(vconn, "ghx")), len(grefs),
+             "github refs rebuilt without duplication on reindex")
+
+        # pure extractor
+        ex = ghl.extract_refs("see #5, foo/bar#6, https://github.com/x/y/issues/7")
+        c.eq({r["number"] for r in ex}, {5, 6, 7}, "extract_refs finds all three forms")
+        c.eq(ghl.extract_refs("color#fff and id#x"), [], "extract_refs ignores non-issue # noise")
+
+        # --- 2.2: cross-session reference detection ------------------------
+        xrefs = cross_ref.find_cross_refs(vconn)
+        ghx_ref = next((x for x in xrefs if x["session_id"] == "ghx"), None)
+        c.ok(ghx_ref is not None, "cross_ref detects the 'like we did last time' prompt")
+        c.eq(ghx_ref["message_index"], 0, "cross_ref reports the prompt's seq")
+        c.ok("last time" in ghx_ref["matched_phrase"], "cross_ref surfaces the matched phrase")
+        c.ok(any(cand["session_id"] == "old1" for cand in ghx_ref["candidate_sessions"]),
+             "cross_ref proposes the earlier same-project session as a candidate")
+        c.eq(cross_ref.matched_phrase("just a normal prompt"), None,
+             "cross_ref matched_phrase is None for an ordinary prompt")
+        c.ok(api.cross_refs(vconn)["cross_refs"], "api.cross_refs returns the references")
+
+        # --- 2.3: prompt effectiveness score -------------------------------
+        sc = prompt_score.score_prompt_at(vconn, "ghx", 0)
+        c.ok(sc is not None and 0 <= sc["score"] <= 100, "prompt score is within 0..100")
+        c.eq(set(sc["components"]), {"tool_success", "continuation", "low_errors"},
+             "prompt score exposes its three components")
+        c.eq(sc["tool_calls"], 1, "prompt score counts the immediate tool call")
+        c.eq(sc["tool_errors"], 0, "prompt score counts zero errors for a clean edit")
+        c.ok(prompt_score.score_from_components(
+            {"tool_success": 1.0, "continuation": 1.0, "low_errors": 1.0}) == 100,
+            "a perfect prompt scores 100")
+        c.ok(prompt_score.score_from_components(
+            {"tool_success": 0.0, "continuation": 0.0, "low_errors": 0.0}) == 0,
+            "a useless prompt scores 0")
+        c.ok(prompt_score.score_prompt_at(vconn, "ghx", 1) is None,
+             "prompt score is None for a non-user message")
+        # a retry-shaped follow-up tanks the low-errors component
+        comp_retry = prompt_score.score_components(
+            tool_calls=2, tool_errors=0, follow_output_tokens=1000, retry_followup=True)
+        comp_clean = prompt_score.score_components(
+            tool_calls=2, tool_errors=0, follow_output_tokens=1000, retry_followup=False)
+        c.ok(comp_retry["low_errors"] < comp_clean["low_errors"],
+             "a retry follow-up lowers the low-errors component")
+
+        # --- 2.6: session pattern mining -----------------------------------
+        # craft a debug loop (Bash×4) + a recurring Read→Edit workflow.
+        _mk_session(vconn, "loop", title="debug", msg_count=8, last_epoch=1_700_000_000.0)
+        for i in range(4):
+            _mk_tool(vconn, "loop", "Bash", seq=i)
+        for sidw in ("wf1", "wf2", "wf3"):
+            _mk_session(vconn, sidw, title="wf", msg_count=4, last_epoch=1_700_000_500.0)
+            _mk_tool(vconn, sidw, "Read", seq=0)
+            _mk_tool(vconn, sidw, "Edit", seq=1)
+        vconn.commit()
+        loops = patmod2.debug_loops(vconn)
+        c.ok(any(x["session_id"] == "loop" and x["tool"] == "Bash" and x["length"] == 4 for x in loops),
+             "debug_loops detects the 4×Bash run")
+        wfs = patmod2.recurring_workflows(vconn, min_count=3)
+        c.ok(any(w["steps"] == ["Read", "Edit"] and w["count"] >= 3 for w in wfs),
+             "recurring_workflows clusters the Read→Edit workflow")
+        tod = patmod2.time_of_day(vconn)
+        c.ok(tod and all({"hour", "label", "sessions", "emoji"} <= set(t) for t in tod),
+             "time_of_day returns ranked hours with emoji")
+        mom = patmod2.project_momentum(vconn)
+        c.ok(all(m["momentum"] in ("rising", "stalling", "steady") for m in mom),
+             "project_momentum labels every project")
+        c.ok("workflows" in api.patterns_workflows(vconn), "api.patterns_workflows wraps the list")
+        c.ok("debug_loops" in api.patterns_debug_loops(vconn) and
+             "time_of_day" in api.patterns_debug_loops(vconn),
+             "api.patterns_debug_loops carries loops + hours")
+        c.ok("momentum" in api.patterns_momentum(vconn), "api.patterns_momentum wraps the list")
+
+        # --- 2.7: RSS / Atom feed ------------------------------------------
+        import xml.etree.ElementTree as _ET
+        rss = feed.build_rss(vconn)
+        atom = feed.build_atom(vconn)
+        root_rss = _ET.fromstring(rss)
+        root_atom = _ET.fromstring(atom)
+        c.eq(root_rss.tag, "rss", "RSS document root is <rss>")
+        n_items = len(root_rss.findall("./channel/item"))
+        n_sessions = vconn.execute("SELECT COUNT(*) FROM sessions WHERE last_epoch>0").fetchone()[0]
+        c.eq(n_items, min(25, n_sessions), "RSS item count matches the (capped) session count")
+        c.ok(root_atom.tag.endswith("feed"), "Atom document root is <feed>")
+        c.eq(len(feed.feed_items(vconn, {"limit": 1})), 1, "feed respects the ?limit= filter")
+        c.ok(feed.feed_items(vconn, {"project": "proj"}), "feed respects the ?project= filter")
+        c.ok(rss.startswith("<?xml"), "RSS carries an XML declaration")
+
+        # --- 2.4: multi-machine sync (mocked runner) -----------------------
+        sync_dir = os.path.join(tmp, "syncstate")
+        os.makedirs(sync_dir)
+        push_plan = syncmod.plan("push", sync_dir, "git@host:repo.git", "git")
+        c.ok(["git", "init"] in push_plan and any(p[:2] == ["git", "push"] for p in push_plan),
+             "sync push plan initialises + pushes via git")
+        pull_plan = syncmod.plan("pull", sync_dir, "host:/path/", "rsync")
+        c.eq(pull_plan[0][0], "rsync", "sync rsync pull plan uses rsync")
+        dry = syncmod.sync("push", state_dir=sync_dir, remote="r", method="git", dry_run=True)
+        c.ok(dry["dry_run"] and dry["commands"], "sync --dry-run returns commands, runs nothing")
+        calls = []
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(args, cwd):
+            calls.append(args)
+            return _R()
+
+        res = syncmod.sync("push", state_dir=sync_dir, remote="r", method="git",
+                           run=_fake_run, now=1234.0)
+        c.ok(res["ok"] and calls, "sync push runs the planned commands via the injected runner")
+        st = syncmod.status(sync_dir)
+        c.eq(st["last_push"], 1234.0, "sync status records the push timestamp")
+        c.eq(st["method"], "git", "sync status records the method")
+        # a 'nothing to commit' is not a hard failure
+        def _no_changes(args, cwd):
+            calls.append(args)
+            r = _R()
+            if args[:2] == ["git", "commit"]:
+                r.returncode = 1
+                r.stdout = "nothing to commit, working tree clean"
+            return r
+        res2 = syncmod.sync("push", state_dir=sync_dir, remote="r", method="git", run=_no_changes)
+        c.ok(res2["ok"] and res2["no_changes"], "sync treats 'nothing to commit' as success")
+
+        # --- 2.11: changelog draft generator -------------------------------
+        c.eq(changelog_draft.classify("fix: crash on empty input"), "Fixed", "classify fix → Fixed")
+        c.eq(changelog_draft.classify("feat: add the feed"), "Added", "classify feat → Added")
+        c.eq(changelog_draft.classify("security: patch path traversal"), "Security",
+             "classify security → Security")
+        c.eq(changelog_draft.classify("refactor the parser"), "Changed", "classify refactor → Changed")
+        draft = changelog_draft.render_draft(
+            ["feat: add x", "fix: a crash", "security: harden y", "Merge branch 'z'"],
+            version="0.6.0", date="2026-06-26")
+        c.ok("## [0.6.0] - 2026-06-26" in draft, "draft has the version header")
+        c.ok("### Added" in draft and "### Fixed" in draft and "### Security" in draft,
+             "draft groups commits into sections")
+        c.ok("Merge branch" not in draft, "draft drops merge commits")
+        # git integration via a fully mocked runner
+        def _git(args):
+            if args[:1] == ["describe"]:
+                return 0, "v0.5.2\n"
+            if args[:1] == ["log"]:
+                return 0, "feat: thing\nfix: bug\n"
+            return 0, ""
+        gen = changelog_draft.generate(version="0.6.0", run=_git)
+        c.ok(gen["available"] and gen["tag"] == "v0.5.2" and gen["count"] == 2,
+             "changelog_draft.generate reads the log since the last tag")
+
+        # --- 2.8: init wizard state machine (mock actions + stdin) ---------
+        class _FakeActions(init_wizard.WizardActions):
+            def __init__(self):
+                super().__init__(vdb)
+                self.did = []
+            def is_indexed(self):
+                return True
+            def hook_installed(self):
+                return False
+            def install_hook(self):
+                self.did.append("hook")
+                return {}
+            def write_watch_script(self):
+                self.did.append("watch")
+                return "/tmp/w.sh"
+            def set_budget(self, amount, period="monthly"):
+                self.did.append(("budget", amount))
+                return {}
+            def run_selftest(self):
+                self.did.append("selftest")
+                return 0
+            def open_app(self):
+                self.did.append("open")
+
+        fa = _FakeActions()
+        out_lines: list = []
+        wstate = init_wizard.run_wizard(
+            fa, inputs=iter(["y", "y", "25", "y", "n"]), out=out_lines)
+        c.eq(wstate["steps"],
+             ["doctor", "hook", "watch", "budget", "selftest", "summary", "open"],
+             "wizard walks every step in order")
+        c.eq(wstate["hook"], "installed", "wizard installs the hook on 'y'")
+        c.eq(wstate["budget"], 25.0, "wizard reads the budget value")
+        c.eq(wstate["selftest_rc"], 0, "wizard runs the self-test")
+        c.ok(("budget", 25.0) in fa.did and "hook" in fa.did, "wizard performs the chosen actions")
+        # --yes path takes every default with no input
+        fa2 = _FakeActions()
+        w2 = init_wizard.run_wizard(fa2, assume_yes=True, out=[])
+        c.ok(w2["hook"] == "installed" and w2["opened"] is False,
+             "wizard --yes installs the hook and declines the open default")
+
+        # --- mcp tools #15 + #16 dispatch ----------------------------------
+        def _vrpc(req):
+            return mcp.handle_request(vdb, req)
+
+        vtl = _vrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        vnames = {t["name"] for t in vtl["result"]["tools"]}
+        c.ok({"get_cross_refs", "find_sessions_by_github_ref"} <= vnames,
+             "mcp exposes get_cross_refs + find_sessions_by_github_ref")
+
+        def _vcall(name, arguments):
+            r = _vrpc({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                       "params": {"name": name, "arguments": arguments}})
+            return json.loads(r["result"]["content"][0]["text"]), r["result"]["isError"]
+
+        xr, err = _vcall("get_cross_refs", {"limit": 10})
+        c.ok(not err and "cross_refs" in xr, "mcp get_cross_refs returns references")
+        gh, err = _vcall("find_sessions_by_github_ref", {"ref": "#123"})
+        c.ok(not err and any(r["session_id"] == "ghx" for r in gh["results"]),
+             "mcp find_sessions_by_github_ref finds the session")
+
+        # --- new CLI commands smoke-test -----------------------------------
+        rc, out = _run(["feed", "--db", vdb])
+        c.eq(rc, 0, "cli feed exits 0")
+        c.ok("/api/feed.rss" in out, "cli feed prints the RSS URL")
+        rc, out = _run(["sync", "--status", "--db", os.path.join(sync_dir, "index.db")])
+        c.eq(rc, 0, "cli sync --status exits 0")
+        rc, out = _run(["sync", "--push", "--remote", "r", "--dry-run",
+                        "--db", os.path.join(sync_dir, "index.db")])
+        c.eq(rc, 0, "cli sync --dry-run exits 0")
+        c.ok("dry run" in out, "cli sync --dry-run announces a dry run")
+
+        vconn.close()
+
     # --- web assets: guard the SPA wiring the UI behaviors depend on ------
     # The behaviors themselves are JS/CSS (exercised in a browser), but these
     # checks fail CI if a refactor strips the wiring, on every OS, zero deps.
@@ -1131,6 +1419,64 @@ def run() -> int:
     # nav exposes the two new top-level views
     c.ok("'efficiency'" in app_js and "'prompts'" in app_js,
          "app.js: router registers the efficiency + prompts routes")
+
+    # --- v0.6.0 web wiring -------------------------------------------------
+    with open(os.path.join(web_dir, "sw.js"), encoding="utf-8") as fh:
+        sw_js = fh.read()
+    manifest_path = os.path.join(web_dir, "manifest.json")
+    c.ok(os.path.isfile(manifest_path), "web/manifest.json shipped")
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    # 2.5 PWA: valid manifest with the required fields + icons + SW + registration
+    for _field in ("name", "short_name", "start_url", "display", "icons", "theme_color"):
+        c.ok(_field in manifest, f"manifest.json has required field {_field!r}")
+    c.ok(manifest["theme_color"] == "#9a8cff", "manifest uses the brand colour")
+    c.ok(len(manifest["icons"]) >= 2 and any("512" in i["sizes"] for i in manifest["icons"]),
+         "manifest declares 192 + 512 icons")
+    c.ok(os.path.isfile(os.path.join(web_dir, "assets", "icon-192.svg"))
+         and os.path.isfile(os.path.join(web_dir, "assets", "icon-512.svg")),
+         "pure-SVG PWA icons shipped")
+    c.ok('rel="manifest"' in index_html, "index.html links the manifest")
+    c.ok("registerServiceWorker" in app_js and "serviceWorker.register('sw.js')" in app_js,
+         "app.js: registers the service worker")
+    c.ok("/api/" in sw_js and "network-first" in sw_js.lower(),
+         "sw.js: API responses are network-first (never cached)")
+    c.ok("caches.open" in sw_js and "SHELL" in sw_js, "sw.js: caches the static shell")
+    # 2.1 replay: pill speed control (0.5×..∞), typewriter, jump-to-error, summary
+    c.ok("REPLAY_SPEEDS" in app_js and "Infinity" in app_js, "app.js: replay has a 0.5×..∞ speed set")
+    c.ok("speed-pill" in app_js and ".speed-pill" in css, "replay: pill-segmented speed control styled")
+    c.ok("replay-typewriter" in app_js and "@keyframes cs-typewriter" in css,
+         "replay: CSS typewriter reveal wired")
+    c.ok("function firstErrorIndex(" in app_js and "jumpToError" in app_js,
+         "replay: jump-to-first-error wired")
+    c.ok("function replaySummaryCard(" in app_js and ".replay-summary" in css,
+         "replay: end-of-playback summary card present + styled")
+    c.ok("replay.speedUp()" in app_js and "replay.speedDown()" in app_js,
+         "replay: '<' / '>' step the speed")
+    # 2.6 patterns view + auto-generated SVG flowchart
+    c.ok("async function viewPatterns(" in app_js and "'patterns'" in app_js,
+         "app.js: Patterns view + route registered")
+    c.ok("function workflowFlowchart(" in app_js and ".wf-svg" in css,
+         "patterns: pure-SVG workflow flowchart wired")
+    c.ok("/api/patterns/workflows" in app_js and "/api/patterns/momentum" in app_js,
+         "patterns: workflow + momentum endpoints wired")
+    c.ok(".mom-badge.rising" in css, "patterns: momentum badges styled")
+    # 2.10 github refs card + 2.2 cross-reference card
+    c.ok("function githubRefsCard(" in app_js and ".gh-refs-card" in css,
+         "app.js: GitHub references card present + styled")
+    c.ok("function crossRefCard(" in app_js and ".xref-card" in css,
+         "app.js: cross-reference card present + styled")
+    # 2.12 dev self-test dashboard
+    c.ok("async function viewDev(" in app_js and "/api/dev/selftest" in app_js,
+         "app.js: developer self-test dashboard wired to the SSE endpoint")
+    c.ok("e.key === 'D'" in app_js or "e.key === 'd'" in app_js,
+         "app.js: Shift+D opens the developer view")
+    c.ok(".dev-selftest-out" in css and ".dev-line.bad" in css, "dev dashboard styled")
+    # 2.9 a11y: document title per route + role=status toast host
+    c.ok("function docTitleFor(" in app_js and "document.title =" in app_js,
+         "a11y: document title updates per route")
+    c.ok('role="status"' in index_html, "a11y: live-update toast host announces via role=status")
+    c.ok('name="theme-color"' in index_html, "index.html: theme-color meta for installed PWA")
 
     # every <button> in the shipped shell has an accessible name (text/aria/title)
     import html.parser as _hp

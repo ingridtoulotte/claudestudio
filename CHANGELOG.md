@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-26
+
+The "workspace, completed" release. v0.6.0 turns ClaudeStudio from a session
+browser into a full Claude Code workspace: a time-machine replay you can scrub at
+any speed, cross-session and GitHub reference maps, prompt-effectiveness scoring,
+multi-machine sync without a cloud, an RSS/Atom feed, a one-command onboarding
+wizard, a pattern-mining dashboard, an installable PWA, and a WCAG 2.1 AA pass.
+Still 100% local, zero runtime dependencies, deterministic — the self-test grows
+396 → 495 checks, the MCP server 14 → 16 tools, and the schema migrates in place
+to v4. The `CODE_OF_CONDUCT.md` file is untouched.
+
+### Added
+- **Time-machine replay with speed control (`web/app.js`, `docs/REPLAY.md`).** A
+  pill-segmented speed control (`0.5× / 1× / 2× / 5× / ∞`), a CSS-only typewriter
+  reveal during auto-advance (respects `prefers-reduced-motion`), a "jump to first
+  error" button, keyboard speed stepping (`<` / `>`), and a session-summary card
+  that auto-shows at the end of playback. The timeline slider is now a keyboard
+  -operable `role="slider"`.
+- **Cross-session reference detection (`cross_ref.py`, `GET /api/cross-refs`, MCP
+  tool #15 `get_cross_refs`).** Detects prompts that point back at an earlier
+  session ("as we did last time", "like in the refactor session") and proposes the
+  candidate sessions being referenced, ranked by project + keyword overlap. Shown
+  as a Cross-references card in the session detail view. Deterministic, no model
+  calls. 8+ self-test assertions.
+- **Prompt effectiveness score (`prompt_score.py`,
+  `GET /api/prompts/{id}/effectiveness`).** A deterministic 0–100 score per user
+  prompt from what happened next — immediate tool success, productive
+  continuation (log-scaled output), and an error/retry penalty (prompt length is
+  reported, not penalised). Surfaced as a coloured bar in the Prompt Library.
+- **Multi-machine sync via git/rsync (`sync.py`, `claudestudio sync`,
+  `docs/SYNC.md`).** `--push` / `--pull` / `--status` / `--dry-run` over a bare
+  git repo or rsync — keep your index in sync across machines with no cloud. Only
+  `~/.claudestudio/` is ever touched; conflicts are detected (`--ff-only`), never
+  guessed. 6+ assertions via a mocked runner.
+- **PWA manifest + service worker (`web/manifest.json`, `web/sw.js`).** Install
+  ClaudeStudio as a desktop app. The service worker caches the static shell (instant
+  load + an offline "server offline / retry" state) while always fetching API data
+  network-first, and signals "update available" on a new deploy. Pure-SVG `CS`
+  monogram icons at 192/512 in the brand purple.
+- **Session pattern mining dashboard (`patterns.py`, `GET /api/patterns/*`, the
+  Patterns view).** Top recurring tool-sequence workflows as auto-generated SVG
+  mini-flowcharts, debugging loops (one tool fired 3×+ in a row), most-productive
+  hours, and a 4-week project-momentum index (rising / stalling / steady).
+- **RSS / Atom activity feed (`feed.py`, `GET /api/feed.rss`, `/api/feed.atom`,
+  `claudestudio feed`).** Valid XML feeds of recent sessions built with stdlib
+  `xml.etree.ElementTree`, honouring `?project=` / `?since=` / `?limit=`. Pipe your
+  history into any RSS reader, Slack bot, or email client on localhost.
+- **`claudestudio init` onboarding wizard (`init_wizard.py`).** A no-curses
+  stdin/stdout flow: detect the index, install the `SessionEnd` hook, drop a
+  `watch` helper, set an optional budget, run the self-test, and print a "you're
+  set up" summary. `--yes` accepts every default non-interactively.
+- **GitHub issue/PR deep linker (`github_linker.py`, schema v4
+  `session_github_refs` table, `GET /api/session/{id}/github-refs`,
+  `GET /api/github-refs/search`, MCP tool #16 `find_sessions_by_github_ref`).**
+  Detects `#123`, `owner/repo#456`, and full GitHub URLs at index time; surfaces a
+  GitHub-references card with clickable external links and finds which sessions
+  discussed a given issue. Read-only — no GitHub API calls.
+- **Automated CHANGELOG draft generator (`changelog_draft.py`,
+  `claudestudio changelog-draft`).** Reads the git log since the last tag and
+  drafts a Keep-a-Changelog entry sorted into Added/Changed/Fixed/Security by
+  auditable keyword heuristics. Exits cleanly when git isn't available.
+- **Interactive self-test dashboard (`GET /api/dev/selftest`, the Developer
+  view).** A hidden, dev-only view (`?dev=1` or `Shift+D`) that runs the self-test
+  server-side and streams each check over SSE as green ✓ / red ✗ lines. No impact
+  on normal users; great for contributors and demos.
+- **Accessibility overhaul to WCAG 2.1 AA (`docs/ACCESSIBILITY.md`).** Visible
+  `:focus-visible` rings, `aria-label`s on every icon-only button (CI-enforced),
+  a keyboard-operable replay slider, a `role="status"` live-update toast, and a
+  per-route document `<title>`.
+
+### Changed
+- The MCP server now exposes **16 tools** (was 14); the self-test grows to **495
+  checks** (was 396).
+- CI matrix expands to **5 Python versions** (3.9–3.13) × 3 OSes, with added
+  `stats` and `demo` smoke steps.
+- Added GitHub infrastructure: structured issue forms (bug / feature /
+  discussion), an enriched PR template, Dependabot (GitHub Actions), a CodeQL
+  security workflow, and a stale-issues bot.
+
+### Migrations
+- **Schema v3 → v4 (in place, backward-compatible).** Adds the
+  `session_github_refs` table (derived data, rebuilt on reindex — never user
+  state). Old indexes start empty and fill in on the next reindex; opening a
+  newer-schema index with an older build still fails loudly.
+
 ## [0.5.2] - 2026-06-25
 
 The "ambient intelligence" release. ClaudeStudio now reads *meaning* out of your

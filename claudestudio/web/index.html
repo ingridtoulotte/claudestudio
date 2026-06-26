@@ -6,6 +6,10 @@
   <title>ClaudeStudio</title>
   <meta name="description" content="The desktop workspace for Claude Code — explore, search, replay and understand every session." />
   <link rel="icon" href="assets/icon.svg" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#9a8cff" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="apple-touch-icon" href="assets/icon-192.svg" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -58,7 +62,7 @@
     </div>
   </div>
 
-  <div class="toast-host" id="toasts"></div>
+  <div class="toast-host" id="toasts" role="status" aria-live="polite"></div>
 
   <script src="keyboard.js"></script>
   <script src="app.js"></script>

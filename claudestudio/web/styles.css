@@ -747,3 +747,68 @@ mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 
 .kbd-cheat-row kbd { background: var(--surface-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 7px; font-family: var(--mono); font-size: 11px; min-width: 20px; text-align: center; }
 
 .budget-arc { display: block; }
+
+/* ===== v0.6.0 ===== */
+
+/* 2.1 replay — pill speed control, jump-to-error, typewriter, summary card */
+.replay-speed { display: inline-flex; gap: 2px; background: var(--surface-3); border-radius: 8px; padding: 2px; }
+.replay-speed .speed-pill { border: 0; background: transparent; color: var(--text-3); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; cursor: pointer; min-width: 30px; }
+.replay-speed .speed-pill:hover { color: var(--text); }
+.replay-speed .speed-pill.on { background: var(--accent); color: #111; }
+.replay-btn.jump-error { color: #f0a868; }
+.replay-btn.jump-error:disabled { opacity: .35; }
+@keyframes cs-typewriter { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.msg-text.replay-typewriter { animation: cs-typewriter 1.1s steps(40, end); }
+@media (prefers-reduced-motion: reduce) { .msg-text.replay-typewriter { animation: none; } }
+.replay-summary { margin: 18px 0; padding: 16px 20px; border: 1px solid var(--accent); border-radius: 12px; background: linear-gradient(180deg, rgba(154,140,255,.10), transparent); }
+.replay-summary .rs-title { font-weight: 700; margin-bottom: 8px; color: var(--accent); }
+.replay-summary .rs-stats { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; color: var(--text-2); }
+.replay-summary .rs-stats b { color: var(--text); }
+.replay-summary .rs-stats .rs-err b { color: #ff6b6b; }
+
+/* 2.10 github references card */
+.gh-refs-card, .xref-card { margin: 12px 0; padding: 12px 16px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface-2); }
+.ghc-k { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); margin-bottom: 8px; }
+.ghc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.gh-ref { font-family: var(--mono); font-size: 12px; text-decoration: none; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--text); background: var(--surface-3); }
+.gh-ref.pr { border-color: #7d5cff; }
+.gh-ref.issue { border-color: #5ec98a; }
+.gh-ref[href]:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 2.2 cross-reference card */
+.xref-sub { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
+.xref-row { display: block; width: 100%; text-align: left; border: 0; background: transparent; cursor: pointer; padding: 6px 8px; border-radius: 6px; }
+.xref-row:hover { background: var(--surface-3); }
+.xref-phrase { color: var(--accent); font-style: italic; margin-right: 8px; }
+.xref-text { color: var(--text-3); font-size: 12px; }
+
+/* 2.6 patterns view */
+.pat-section { margin: 22px 0; }
+.pat-h { font-size: 15px; margin: 0 0 10px; }
+.wf-row { display: flex; align-items: center; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.wf-svg { display: block; }
+.wf-meta { color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.loop-row, .tod-row, .mom-row { display: flex; align-items: center; gap: 14px; padding: 7px 10px; border-radius: 8px; }
+.loop-row:hover, .mom-row:hover { background: var(--surface-2); }
+.loop-tool { font-family: var(--mono); font-weight: 600; min-width: 80px; }
+.loop-len { color: var(--text-3); flex: 1; }
+.tod-rank { color: var(--text-3); font-weight: 700; }
+.tod-emoji { font-size: 18px; }
+.tod-label { font-family: var(--mono); }
+.tod-count { color: var(--text-3); margin-left: auto; }
+.mom-name { font-weight: 600; min-width: 160px; }
+.mom-counts { color: var(--text-3); font-family: var(--mono); }
+.mom-badge { margin-left: auto; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+.mom-badge.rising { background: rgba(94,201,138,.18); color: #5ec98a; }
+.mom-badge.stalling { background: rgba(255,107,107,.18); color: #ff6b6b; }
+.mom-badge.steady { background: var(--surface-3); color: var(--text-3); }
+
+/* 2.12 developer self-test dashboard */
+.dev-bar { display: flex; align-items: center; gap: 14px; margin: 14px 0; }
+.dev-status { font-size: 13px; color: var(--text-3); }
+.dev-status.good { color: #5ec98a; }
+.dev-status.bad { color: #ff6b6b; }
+.dev-selftest-out { font-family: var(--mono); font-size: 12px; line-height: 1.5; max-height: 60vh; overflow: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.dev-line { white-space: pre-wrap; color: var(--text-2); }
+.dev-line.good { color: #5ec98a; }
+.dev-line.bad { color: #ff6b6b; font-weight: 600; }

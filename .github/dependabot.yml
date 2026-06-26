@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # ClaudeStudio ships zero runtime dependencies, so there is nothing to track on
+  # the Python side — only the GitHub Actions used by CI need version bumps.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"

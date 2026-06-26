@@ -75,6 +75,8 @@ JSON document.
 | `get_diff_for_session` | `session_id: str`, `file_path?: str` | Every inline file diff in a session (old→new for each edit/write), optionally filtered to one file. *(v0.5.2)* |
 | `get_annotations` | `session_id: str` | The user's inline annotations on a session (whole-session + per-message notes). *(v0.5.2)* |
 | `generate_project_brief` | `project_id: str` | A full onboarding brief: sessions, spend, top files/tools, last activity, and an inferred CLAUDE.md profile. *(v0.5.2)* |
+| `get_cross_refs` | `limit?: int = 50` | Prompts that reference an earlier session ("as we did last time") with candidate target sessions. *(v0.6.0)* |
+| `find_sessions_by_github_ref` | `ref?: str`, `number?: int`, `repo?: str` | Sessions that discussed a GitHub issue/PR (`#123`, `owner/repo#456`). Read-only; no GitHub API calls. *(v0.6.0)* |
 
 ### v0.5.2 tool examples
 

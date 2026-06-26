@@ -190,6 +190,7 @@ def get_session(conn, session_id: str) -> dict | None:
     session["timeline"] = timeline
     session["health"] = _session_health(session, timeline)
     session["git"] = _session_git(session)
+    session["github_refs"] = index.github_refs_for_session(conn, session_id)
     return session
 
 
@@ -1362,3 +1363,99 @@ def _batch_index_md(entries: list[dict]) -> str:
             f"${float(e['cost_usd']):.2f} | [{e['file']}]({e['file']}) |"
         )
     return "\n".join(lines) + "\n"
+
+
+# ===========================================================================
+# v0.6.0 API surface
+# ===========================================================================
+
+# --- 2.2: cross-session reference detection --------------------------------
+
+def cross_refs(conn, params: dict | None = None) -> dict:
+    """User prompts that reference an earlier session + candidate targets."""
+    from . import cross_ref
+    params = params or {}
+    limit = _int_param(params.get("limit"), 200, lo=1, hi=2000)
+    return {"cross_refs": cross_ref.find_cross_refs(conn, limit=limit)}
+
+
+# --- 2.3: prompt effectiveness score ---------------------------------------
+
+def prompt_effectiveness(conn, prompt_id: str) -> dict:
+    """Effectiveness for one library prompt: aggregate score over its occurrences."""
+    from . import prompt_score
+    rows = index.list_prompts(conn, limit=10000)
+    match = next((p for p in rows if str(p["id"]) == str(prompt_id)), None)
+    if match is None:
+        return {"id": prompt_id, "error": "not found", "count": 0, "avg_score": None}
+    agg = prompt_score.effectiveness_for_text(conn, match["text"])
+    return {"id": prompt_id, "text": match["text"], **agg}
+
+
+def prompts_with_effectiveness(conn, params: dict | None = None) -> dict:
+    """The prompt library with an effectiveness score attached to each entry.
+
+    Backs the Prompt Library bar. Scores are computed on the (bounded) library so
+    the view can colour each prompt by how well it has historically worked.
+    """
+    from . import prompt_score
+    base = list_prompts(conn, params or {})
+    for p in base.get("prompts", []):
+        agg = prompt_score.effectiveness_for_text(conn, p["text"])
+        p["effectiveness"] = agg["avg_score"]
+        p["effectiveness_n"] = agg["count"]
+    return base
+
+
+# --- 2.6: session pattern mining -------------------------------------------
+
+def patterns_workflows(conn, params: dict | None = None) -> dict:
+    from . import patterns
+    params = params or {}
+    min_count = _int_param(params.get("min_count"), patterns.WORKFLOW_MIN_COUNT, lo=2, hi=1000)
+    return {"workflows": patterns.recurring_workflows(conn, min_count=min_count)}
+
+
+def patterns_debug_loops(conn, params: dict | None = None) -> dict:
+    from . import patterns
+    params = params or {}
+    min_repeat = _int_param(params.get("min_repeat"), patterns.DEBUG_LOOP_MIN, lo=2, hi=1000)
+    return {"debug_loops": patterns.debug_loops(conn, min_repeat=min_repeat),
+            "time_of_day": patterns.time_of_day(conn)}
+
+
+def patterns_momentum(conn, params: dict | None = None) -> dict:
+    from . import patterns
+    params = params or {}
+    weeks = _int_param(params.get("weeks"), 4, lo=1, hi=52)
+    return {"momentum": patterns.project_momentum(conn, weeks=weeks)}
+
+
+# --- 2.10: GitHub issue/PR deep linker -------------------------------------
+
+def github_refs(conn, session_id: str) -> dict:
+    """GitHub references found in one session (for the detail-view card)."""
+    return {"session_id": session_id,
+            "refs": index.github_refs_for_session(conn, session_id)}
+
+
+def github_refs_search(conn, params: dict | None = None) -> dict:
+    """Find sessions that discussed a given issue/PR. Accepts ?q=#123 / 123 / repo."""
+    params = params or {}
+    q = (params.get("q") or "").strip()
+    repo = (params.get("repo") or "").strip()
+    owner = ""
+    number = None
+    if "/" in repo:
+        owner, _, repo = repo.partition("/")
+    if q:
+        m = re.search(r"(\d+)", q)
+        if m:
+            number = int(m.group(1))
+        if "/" in q and "#" in q:
+            head, _, num = q.partition("#")
+            owner, _, repo = head.partition("/")
+            number = int(num) if num.isdigit() else number
+    results = index.search_github_refs(conn, number=number, repo=repo, owner=owner)
+    return {"query": q, "repo": (f"{owner}/{repo}" if owner else repo),
+            "number": number, "results": results}

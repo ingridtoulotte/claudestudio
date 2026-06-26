@@ -205,6 +205,51 @@ reindex stats.
 Grounded, local Q&A over your history (no model calls). Returns the structured
 answer plus suggestions.
 
+## v0.6.0
+
+### `GET /api/cross-refs?limit=N`
+Prompts that reference an earlier session ("as we did last time", "like in the
+refactor session"). Returns `{"cross_refs": [{session_id, message_index,
+matched_phrase, text, candidate_sessions:[{session_id,title,last_ts,score}]}]}`.
+`limit` defaults to 200 (clamped 1–2000). Empty index → `{"cross_refs": []}`.
+
+### `GET /api/patterns/workflows?min_count=N`
+Top recurring tool-sequence workflows. `{"workflows":[{steps:[...],count,sessions,length}]}`.
+
+### `GET /api/patterns/debug-loops?min_repeat=N`
+Runs where one tool fired N+ times in a row, plus most-productive hours.
+`{"debug_loops":[{session_id,tool,length}], "time_of_day":[{hour,label,sessions,emoji}]}`.
+
+### `GET /api/patterns/momentum?weeks=N`
+Per-project session frequency, recent vs. prior half of the window.
+`{"momentum":[{project,project_name,recent,older,total,momentum}]}` where
+`momentum` is `rising` | `stalling` | `steady`.
+
+### `GET /api/session/{id}/github-refs`
+GitHub issue/PR references detected in one session.
+`{"session_id": id, "refs": [{seq,ref,owner,repo,number,kind,url}]}`. `kind` is
+`issue` | `pr`. (These also ride along on `GET /api/session/{id}` as `github_refs`.)
+
+### `GET /api/github-refs/search?q=...&repo=owner/repo`
+Find sessions that discussed a given issue/PR. `q` accepts `#123`, `owner/repo#456`
+or a number; `repo` an optional `owner/repo` filter. Returns
+`{"query","repo","number","results":[{session_id,seq,ref,owner,repo,number,kind,url,session_title,last_epoch}]}`.
+
+### `GET /api/prompts/{id}/effectiveness`
+Aggregate effectiveness (0–100) for a library prompt across its historical
+occurrences. `{"id","text","count","avg_score","samples":[...]}`. Unknown id →
+`{"error":"not found","count":0,"avg_score":null}` (200).
+
+### `GET /api/feed.rss` · `GET /api/feed.atom`
+Valid RSS 2.0 / Atom 1.0 feeds of recent sessions. Honour `?project=`,
+`?since=YYYY-MM-DD`, `?limit=N` (1–200, default 25). `application/rss+xml` /
+`application/atom+xml`.
+
+### `GET /api/dev/selftest`
+**Dev-only.** Runs `python -m claudestudio --selftest` and streams the output as
+Server-Sent Events: `{"type":"line","text":...}` per line, then
+`{"type":"done","code":N}`. `text/event-stream`. Backs the hidden Developer view.
+
 ---
 
 ## Notes for builders

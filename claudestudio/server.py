@@ -260,6 +260,8 @@ class Handler(BaseHTTPRequestHandler):
         params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
         if path == "/api/events":
             return self._serve_events()
+        if path == "/api/dev/selftest":
+            return self._serve_dev_selftest()
         if path.startswith("/api/"):
             return self._api_get(path, params)
         return self._serve_static(path)
@@ -370,6 +372,33 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(api.highlights_payload(conn))
                 if path == "/api/prompts/patterns":
                     return self._send_json(api.prompt_patterns(conn, params))
+                # --- v0.6.0 read endpoints ---
+                if path == "/api/cross-refs":
+                    return self._send_json(api.cross_refs(conn, params))
+                if path == "/api/patterns/workflows":
+                    return self._send_json(api.patterns_workflows(conn, params))
+                if path == "/api/patterns/debug-loops":
+                    return self._send_json(api.patterns_debug_loops(conn, params))
+                if path == "/api/patterns/momentum":
+                    return self._send_json(api.patterns_momentum(conn, params))
+                if path == "/api/github-refs/search":
+                    return self._send_json(api.github_refs_search(conn, params))
+                if path.startswith("/api/session/") and path.endswith("/github-refs"):
+                    sid = path[len("/api/session/"):-len("/github-refs")]
+                    return self._send_json(api.github_refs(conn, sid))
+                if path.startswith("/api/prompts/") and path.endswith("/effectiveness"):
+                    pid = unquote(path[len("/api/prompts/"):-len("/effectiveness")])
+                    return self._send_json(api.prompt_effectiveness(conn, pid))
+                if path == "/api/feed.rss":
+                    from . import feed
+                    return self._send_bytes(
+                        feed.build_rss(conn, params).encode("utf-8"),
+                        "application/rss+xml; charset=utf-8")
+                if path == "/api/feed.atom":
+                    from . import feed
+                    return self._send_bytes(
+                        feed.build_atom(conn, params).encode("utf-8"),
+                        "application/atom+xml; charset=utf-8")
                 # --- v0.5.2 read endpoints ---
                 if path == "/api/budget":
                     return self._send_json(api.budget_status(conn))
@@ -469,6 +498,53 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionError, OSError):
                 break
+
+    def _serve_dev_selftest(self):
+        """Dev-only: run the self-test and stream each line over SSE.
+
+        Backs the hidden Developer view (``?dev=1`` / ``Shift+D``). Spawns
+        ``python -m claudestudio --selftest`` and forwards stdout line by line as
+        ``data: {"type":"line",...}`` events, then a final ``done`` with the exit
+        code. Local-only (same Host guard as every endpoint); never touches the
+        index. A failure to launch is reported as one error event, not a crash.
+        """
+        import subprocess
+        import sys
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self._emit_security_headers()
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionError, OSError):
+            return
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "claudestudio", "--selftest"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+        except OSError as exc:
+            try:
+                self.wfile.write(sse_pack({"type": "error", "text": str(exc)}).encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionError, OSError):
+                pass
+            return
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self.wfile.write(sse_pack({"type": "line", "text": line.rstrip("\n")}).encode("utf-8"))
+                self.wfile.flush()
+            code = proc.wait()
+            self.wfile.write(sse_pack({"type": "done", "code": code}).encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionError, OSError):
+            import contextlib
+            with contextlib.suppress(OSError):
+                proc.kill()
 
     def _serve_static(self, path):
         if path in ("/", ""):

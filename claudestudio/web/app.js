@@ -122,6 +122,11 @@ const API = {
   saveAnnotation: (id, b) => API.post('/api/session/' + encodeURIComponent(id) + '/annotations', b),
   delAnnotation: (id, aid) => fetch('/api/session/' + encodeURIComponent(id) + '/annotations/' + encodeURIComponent(aid), { method: 'DELETE' }).then((r) => r.json()),
   claudeMd: (project) => API.get('/api/project/' + encodeURIComponent(project) + '/claude-md'),
+  // v0.6.0
+  patternWorkflows: () => API.get('/api/patterns/workflows'),
+  patternDebugLoops: () => API.get('/api/patterns/debug-loops'),
+  patternMomentum: () => API.get('/api/patterns/momentum'),
+  crossRefs: () => API.get('/api/cross-refs'),
 };
 
 // trigger a browser download from a server endpoint that sets Content-Disposition
@@ -200,6 +205,7 @@ const NAV = [
   { id: 'analytics', label: 'Analytics', icon: 'M4 19V5M4 19h16M8 16v-5M13 16V8M18 16v-9' },
   { id: 'efficiency', label: 'Efficiency', icon: 'M13 2L3 14h7l-1 8 10-12h-7l1-8z' },
   { id: 'prompts', label: 'Prompts', icon: 'M4 5h16M4 12h16M4 19h10M18 17l3 2-3 2' },
+  { id: 'patterns', label: 'Patterns', icon: 'M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z' },
   { id: 'projects', label: 'Projects', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
   { id: 'compare', label: 'Compare', icon: 'M9 3v18M4 7h5M4 12h5M4 17h5M15 3v18M15 8h5M15 13h5' },
   { id: 'wrapped', label: 'Wrapped', icon: 'M12 2l2.4 5 5.6.5-4.2 3.7 1.3 5.5L12 19l-5.1 2.7 1.3-5.5L4 12.5 9.6 12z' },
@@ -251,6 +257,14 @@ function go(route, params = {}) {
   location.hash = '#/' + route + (qs ? '?' + qs : '');
 }
 
+// a11y: a descriptive document title per route (announced on navigation).
+function docTitleFor(route, parts, params) {
+  const names = { sessions: 'Sessions', session: 'Session', ask: 'Ask', bookmarks: 'Bookmarks', timeline: 'Timeline', analytics: 'Analytics', efficiency: 'Efficiency', prompts: 'Prompt library', projects: 'Projects', compare: 'Compare', wrapped: 'Wrapped', search: 'Search', dev: 'Developer' };
+  let label = names[route] || 'Sessions';
+  if (route === 'session' && parts[1]) label = 'Session ' + String(parts[1]).slice(0, 8);
+  return label + ' — ClaudeStudio';
+}
+
 async function router() {
   const raw = location.hash.replace(/^#\/?/, '') || 'sessions';
   const [path, query] = raw.split('?');
@@ -260,6 +274,9 @@ async function router() {
   highlightNav(['session'].includes(route) ? 'sessions' : route);
   setViewKey(null);  // drop any previous view's keyboard handler
   if (typeof closeBookmarkPopover === 'function') closeBookmarkPopover();
+  // a11y: keep the document <title> in sync with the route so screen readers and
+  // the browser history announce where you are ("Session: … — ClaudeStudio").
+  document.title = docTitleFor(route, parts, params);
   try {
     if (route === 'session') return await viewSession(parts[1], params);
     if (route === 'ask') return await viewAsk(params);
@@ -267,11 +284,13 @@ async function router() {
     if (route === 'analytics') return await viewAnalytics();
     if (route === 'efficiency') return await viewEfficiency();
     if (route === 'prompts') return await viewPrompts();
+    if (route === 'patterns') return await viewPatterns();
     if (route === 'projects') return await viewProjects();
     if (route === 'timeline') return await viewTimeline();
     if (route === 'compare') return await viewCompare(params);
     if (route === 'wrapped') return await viewWrapped(params);
     if (route === 'search') return await viewSearch(params);
+    if (route === 'dev') return await viewDev();
     return await viewSessions(params);
   } catch (e) {
     view().innerHTML = '';
@@ -532,10 +551,18 @@ async function viewSession(id, params = {}) {
     ]));
   }
 
+  // v0.6.0: GitHub issue/PR references detected in this session (read-only links)
+  const ghCard = githubRefsCard(s.github_refs || []);
+  if (ghCard) root.appendChild(ghCard);
+
+  // v0.6.0: cross-session references — prompts that point at an earlier session
+  const xrefCard = crossRefCard(s.timeline, id);
+  if (xrefCard) root.appendChild(xrefCard);
+
   // replay bar
   const replay = buildReplay(s.timeline);
   root.appendChild(replay.bar);
-  root.appendChild(el('div', { class: 'replay-hint', html: '<kbd>J</kbd> / <kbd>K</kbd> step · <kbd>Home</kbd> / <kbd>End</kbd> jump · click the track to scrub' }));
+  root.appendChild(el('div', { class: 'replay-hint', html: '<kbd>Space</kbd> play · <kbd>J</kbd> / <kbd>K</kbd> step · <kbd>&lt;</kbd> / <kbd>&gt;</kbd> speed · <kbd>Home</kbd> / <kbd>End</kbd> jump · ⚠ jump to first error' }));
 
   // thread — one node per message (keeps thread.children[i] aligned to seq, which
   // the scrubber, file chips and deep-links all rely on). Consecutive same-role
@@ -547,6 +574,7 @@ async function viewSession(id, params = {}) {
     prevRole = m.role;
   });
   root.appendChild(thread);
+  root.appendChild(replay.summary);
   replay.attach(thread);
 
   view().innerHTML = ''; view().appendChild(root);
@@ -577,6 +605,9 @@ async function viewSession(id, params = {}) {
     else if (k === ' ') { e.preventDefault(); replay.toggle(); }
     else if (k === 'ArrowLeft') { e.preventDefault(); replay.stepBack(); }
     else if (k === 'ArrowRight') { e.preventDefault(); replay.stepForward(); }
+    else if (k === '<' || k === ',') { e.preventDefault(); replay.speedDown(); }
+    else if (k === '>' || k === '.') { e.preventDefault(); replay.speedUp(); }
+    else if (k === 'e' || k === 'E') { e.preventDefault(); replay.jumpToError(); }
     else if (k === 'b' || k === 'B') { e.preventDefault(); if (cursor >= 0) openBookmarkPopover(cursor, null); }
   });
 
@@ -775,30 +806,77 @@ async function viewBookmarks() {
   view().innerHTML = ''; view().appendChild(root);
 }
 
+// speed steps for replay auto-advance. ∞ (Infinity) reveals instantly.
+const REPLAY_SPEEDS = [0.5, 1, 2, 5, Infinity];
+const speedLabel = (sp) => (sp === Infinity ? '∞' : sp + '×');
+
+// index of the first message carrying a tool error / exception trace, or -1.
+function firstErrorIndex(timeline) {
+  for (let i = 0; i < timeline.length; i++) {
+    const m = timeline[i];
+    if ((m.tools || []).some((t) => t.is_error)) return i;
+    if (/\b(traceback|exception|error:|fatal:)\b/i.test(m.text || '')) return i;
+  }
+  return -1;
+}
+
+function replaySummaryCard(timeline) {
+  const tools = timeline.reduce((a, m) => a + (m.tools || []).length, 0);
+  const errors = timeline.reduce((a, m) => a + (m.tools || []).filter((t) => t.is_error).length, 0);
+  const prompts = timeline.filter((m) => m.role === 'user').length;
+  const out = timeline.reduce((a, m) => a + (m.output_tokens || 0), 0);
+  return el('div', { class: 'replay-summary', role: 'status', hidden: '' }, [
+    el('div', { class: 'rs-title', text: '✦ Session replay complete' }),
+    el('div', { class: 'rs-stats' }, [
+      el('span', {}, [el('b', { text: String(timeline.length) }), ' messages']),
+      el('span', {}, [el('b', { text: String(prompts) }), ' prompts']),
+      el('span', {}, [el('b', { text: String(tools) }), ' tool calls']),
+      el('span', { class: errors ? 'rs-err' : '' }, [el('b', { text: String(errors) }), ' errors']),
+      el('span', {}, [el('b', { text: fmt.compact(out) }), ' output tokens']),
+    ]),
+  ]);
+}
+
 function buildReplay(timeline) {
   const n = timeline.length;
-  let idx = n, playing = false, speed = 2, timer = null, threadEl = null;
-  const restartBtn = el('button', { class: 'replay-btn', title: 'Restart', html: ICON.restart });
-  const prevBtn = el('button', { class: 'replay-btn', title: 'Step back', html: ICON.prev });
-  const playBtn = el('button', { class: 'play-btn', title: 'Play / pause', html: playIcon(false) });
-  const nextBtn = el('button', { class: 'replay-btn', title: 'Step forward', html: ICON.next });
-  const track = el('div', { class: 'replay-track' }, [el('div', { class: 'replay-prog' }), el('div', { class: 'replay-knob' })]);
+  let idx = n, playing = false, speedIdx = 2, timer = null, threadEl = null;
+  const speed = () => REPLAY_SPEEDS[speedIdx];
+  const errAt = firstErrorIndex(timeline);
+  const restartBtn = el('button', { class: 'replay-btn', title: 'Restart', 'aria-label': 'Restart replay', html: ICON.restart });
+  const prevBtn = el('button', { class: 'replay-btn', title: 'Step back', 'aria-label': 'Step back', html: ICON.prev });
+  const playBtn = el('button', { class: 'play-btn', title: 'Play / pause', 'aria-label': 'Play or pause replay', html: playIcon(false) });
+  const nextBtn = el('button', { class: 'replay-btn', title: 'Step forward', 'aria-label': 'Step forward', html: ICON.next });
+  const jumpErrBtn = el('button', { class: 'replay-btn jump-error', title: 'Jump to first error', 'aria-label': 'Jump to first error', html: '⚠', disabled: errAt < 0 ? '' : null });
+  const track = el('div', { class: 'replay-track', role: 'slider', tabindex: '0', 'aria-label': 'Replay position', 'aria-valuemin': '0', 'aria-valuemax': String(n) }, [el('div', { class: 'replay-prog' }), el('div', { class: 'replay-knob' })]);
   const pos = el('div', { class: 'replay-pos', text: `${n}/${n}` });
-  const speeds = [1, 2, 4, 8].map((sp) => el('button', { class: sp === speed ? 'on' : '', text: sp + '×', onclick: () => { speed = sp; speeds.forEach((b) => b.classList.toggle('on', +b.textContent.replace('×', '') === sp)); } }));
-  const bar = el('div', { class: 'replaybar' }, [restartBtn, prevBtn, playBtn, nextBtn, track, pos, el('div', { class: 'replay-speed' }, speeds)]);
+  // pill-segmented speed control (0.5× / 1× / 2× / 5× / ∞)
+  const speeds = REPLAY_SPEEDS.map((sp, i) => el('button', { class: 'speed-pill' + (i === speedIdx ? ' on' : ''), text: speedLabel(sp), 'aria-label': 'Playback speed ' + speedLabel(sp), onclick: () => setSpeedIdx(i) }));
+  const speedCtl = el('div', { class: 'replay-speed', role: 'group', 'aria-label': 'Playback speed' }, speeds);
+  const bar = el('div', { class: 'replaybar' }, [restartBtn, prevBtn, playBtn, nextBtn, jumpErrBtn, track, pos, speedCtl]);
+  const summary = replaySummaryCard(timeline);
 
   const prog = $('.replay-prog', track), knob = $('.replay-knob', track);
+  function setSpeedIdx(i) {
+    speedIdx = Math.max(0, Math.min(REPLAY_SPEEDS.length - 1, i));
+    speeds.forEach((b, k) => b.classList.toggle('on', k === speedIdx));
+  }
   function render() {
     if (!threadEl) return;
     const partial = idx < n;  // mid-replay → mark current turn; at end → full readable thread
     [...threadEl.children].forEach((c, i) => {
       c.classList.toggle('hidden-msg', i >= idx);
-      c.classList.toggle('replay-current', partial && i === idx - 1);
+      const isCur = partial && i === idx - 1;
+      c.classList.toggle('replay-current', isCur);
+      // typewriter reveal on the current message's text while auto-advancing
+      const txt = c.querySelector('.msg-text');
+      if (txt) txt.classList.toggle('replay-typewriter', isCur && playing && speed() !== Infinity);
     });
     const frac = n ? idx / n : 1;
     prog.style.width = (frac * 100) + '%'; knob.style.left = (frac * 100) + '%';
     pos.textContent = `${Math.min(idx, n)}/${n}`;
+    track.setAttribute('aria-valuenow', String(Math.min(idx, n)));
     prevBtn.disabled = idx <= 0; nextBtn.disabled = idx >= n;
+    summary.hidden = idx < n;  // show the wrap-up card only at the very end
   }
   function focusCurrent() {
     const target = threadEl && idx > 0 && idx <= n ? threadEl.children[idx - 1] : null;
@@ -807,25 +885,37 @@ function buildReplay(timeline) {
   function step() {
     if (idx >= n) { stop(); return; }
     idx++; render(); focusCurrent();
+    const sp = speed();
+    if (sp === Infinity) { timer = setTimeout(step, 0); return; }
     const gap = timeline[idx - 1]?.gap_s || 0.5;
-    const delay = Math.min(Math.max(gap, 0.3), 6) * 300 / speed;
+    const delay = Math.min(Math.max(gap, 0.3), 6) * 300 / sp;
     timer = setTimeout(step, delay);
   }
   function play() { if (idx >= n) { idx = 0; render(); } playing = true; playBtn.innerHTML = playIcon(true); step(); }
-  function stop() { playing = false; playBtn.innerHTML = playIcon(false); clearTimeout(timer); }
+  function stop() { playing = false; playBtn.innerHTML = playIcon(false); clearTimeout(timer); render(); }
   function seek(target) { stop(); idx = Math.max(0, Math.min(n, target)); render(); focusCurrent(); }
   playBtn.addEventListener('click', () => (playing ? stop() : play()));
   restartBtn.addEventListener('click', () => seek(0));
   prevBtn.addEventListener('click', () => seek(idx - 1));
   nextBtn.addEventListener('click', () => seek(idx + 1));
+  jumpErrBtn.addEventListener('click', () => { if (errAt >= 0) seek(errAt + 1); });
   track.addEventListener('click', (e) => { const rect = track.getBoundingClientRect(); seek(Math.round(((e.clientX - rect.left) / rect.width) * n)); });
+  track.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); seek(idx - 1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); seek(idx + 1); }
+    else if (e.key === 'Home') { e.preventDefault(); seek(0); }
+    else if (e.key === 'End') { e.preventDefault(); seek(n); }
+  });
 
   return {
-    bar,
+    bar, summary,
     attach(t) { threadEl = t; idx = n; render(); },
     toggle() { playing ? stop() : play(); },
     stepBack() { seek(idx - 1); },
     stepForward() { seek(idx + 1); },
+    speedUp() { setSpeedIdx(speedIdx + 1); },
+    speedDown() { setSpeedIdx(speedIdx - 1); },
+    jumpToError() { if (errAt >= 0) seek(errAt + 1); },
   };
 }
 const ICON = {
@@ -1574,6 +1664,47 @@ function healthDot(score) {
 }
 
 // git badge + health breakdown card + a session-level annotation editor
+// v0.6.0: GitHub issue/PR references card (read-only external links).
+function githubRefsCard(refs) {
+  if (!refs || !refs.length) return null;
+  const chips = refs.map((r) => {
+    const label = r.owner ? `${r.owner}/${r.repo}#${r.number}` : `#${r.number}`;
+    const attrs = { class: 'gh-ref ' + (r.kind === 'pr' ? 'pr' : 'issue'), text: (r.kind === 'pr' ? '⇄ ' : '⊙ ') + label };
+    if (r.url) { attrs.href = r.url; attrs.target = '_blank'; attrs.rel = 'noopener noreferrer'; attrs.title = r.url; }
+    return el(r.url ? 'a' : 'span', attrs);
+  });
+  return el('div', { class: 'gh-refs-card' }, [
+    el('div', { class: 'ghc-k', text: 'GitHub references' }),
+    el('div', { class: 'ghc-chips' }, chips),
+  ]);
+}
+
+// phrases that signal a reference to an earlier session (mirror of cross_ref.py).
+const CROSS_REF_RE = /\b(as we did last time|like (?:we did )?last time|in the \w+(?:[ -]\w+)? session|remember when you helped me|remember (?:when|that|how) we|continue from|pick up where|same (?:as|approach as|way as) (?:before|last time)|(?:as|like) (?:before|earlier|previously)|the (?:other|previous|last|earlier) (?:session|time|chat|conversation)|you helped me (?:with|fix|build|refactor|debug))\b/i;
+
+// v0.6.0: cross-session references found in this session's prompts.
+function crossRefCard(timeline, id) {
+  const hits = [];
+  (timeline || []).forEach((m, i) => {
+    if (m.role !== 'user' || !m.text) return;
+    const mt = m.text.match(CROSS_REF_RE);
+    if (mt) hits.push({ seq: i, phrase: mt[0], text: m.text.slice(0, 120) });
+  });
+  if (!hits.length) return null;
+  const rows = hits.slice(0, 5).map((h) => el('button', {
+    class: 'xref-row', title: 'Jump to this prompt',
+    onclick: () => go('session/' + id, { seq: h.seq }),
+  }, [
+    el('span', { class: 'xref-phrase', text: '“' + h.phrase + '”' }),
+    el('span', { class: 'xref-text', text: h.text }),
+  ]));
+  return el('div', { class: 'xref-card' }, [
+    el('div', { class: 'ghc-k', text: 'Cross-references' }),
+    el('div', { class: 'xref-sub', text: 'This session points back at earlier work — open the global cross-reference map for candidates.' }),
+    el('div', {}, rows),
+  ]);
+}
+
 function detailContext(s, id) {
   const wrap = el('div', { class: 'detail-context' });
   if (s.git && s.git.short_sha) {
@@ -1783,6 +1914,133 @@ async function openClaudeMdModal(project) {
   document.body.appendChild(overlay);
 }
 
+// ---- view: patterns (workflows / debug loops / time-of-day / momentum) ----
+// auto-generated mini-flowchart (pure SVG) for a tool sequence.
+function workflowFlowchart(steps) {
+  const boxW = 76, boxH = 30, gap = 22, h = 50;
+  const w = steps.length * boxW + (steps.length - 1) * gap + 8;
+  let x = 4, svg = '';
+  steps.forEach((s, i) => {
+    svg += `<rect x="${x}" y="10" width="${boxW}" height="${boxH}" rx="7" fill="var(--surface-2)" stroke="var(--accent)" stroke-width="1.2"/>`;
+    svg += `<text x="${x + boxW / 2}" y="29" text-anchor="middle" fill="var(--text)" font-size="11" font-family="var(--mono)">${esc(s)}</text>`;
+    if (i < steps.length - 1) {
+      const ax = x + boxW, ax2 = ax + gap;
+      svg += `<line x1="${ax}" y1="25" x2="${ax2 - 4}" y2="25" stroke="var(--accent)" stroke-width="1.4"/>`;
+      svg += `<path d="M${ax2 - 4} 25 l-6 -3 v6 z" fill="var(--accent)"/>`;
+    }
+    x += boxW + gap;
+  });
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="wf-svg">${svg}</svg>`;
+}
+
+async function viewPatterns() {
+  view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const [wf, dl, mo] = await Promise.all([
+    API.patternWorkflows().catch(() => ({ workflows: [] })),
+    API.patternDebugLoops().catch(() => ({ debug_loops: [], time_of_day: [] })),
+    API.patternMomentum().catch(() => ({ momentum: [] })),
+  ]);
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [el('div', {}, [
+    el('h1', { class: 'page-title', text: 'Patterns' }),
+    el('div', { class: 'page-sub', text: 'How you actually work — recurring tool workflows, debugging loops, peak hours and project momentum.' }),
+  ])]));
+
+  // top workflows as mini-flowcharts
+  const wfSec = el('div', { class: 'pat-section' }, [el('h2', { class: 'pat-h', text: '🔁 Top recurring workflows' })]);
+  if ((wf.workflows || []).length) {
+    wf.workflows.forEach((w) => wfSec.appendChild(el('div', { class: 'wf-row' }, [
+      el('div', { class: 'wf-chart', html: workflowFlowchart(w.steps) }),
+      el('div', { class: 'wf-meta', text: `×${w.count} · ${w.sessions.length} session${w.sessions.length > 1 ? 's' : ''}` }),
+    ])));
+  } else { wfSec.appendChild(el('div', { class: 'empty', text: 'No recurring workflows yet.' })); }
+  root.appendChild(wfSec);
+
+  // debug loops + time of day, side by side
+  const dlSec = el('div', { class: 'pat-section' }, [el('h2', { class: 'pat-h', text: '🌀 Debugging loops' })]);
+  if ((dl.debug_loops || []).length) {
+    dl.debug_loops.forEach((d) => dlSec.appendChild(el('div', { class: 'loop-row' }, [
+      el('span', { class: 'loop-tool', text: d.tool }),
+      el('span', { class: 'loop-len', text: `×${d.length} in a row` }),
+      el('button', { class: 'btn-ghost', onclick: () => go('session/' + d.session_id) }, ['open']),
+    ])));
+  } else { dlSec.appendChild(el('div', { class: 'empty', text: 'No tight debugging loops detected.' })); }
+  root.appendChild(dlSec);
+
+  const todSec = el('div', { class: 'pat-section' }, [el('h2', { class: 'pat-h', text: '⏰ Most productive hours' })]);
+  (dl.time_of_day || []).forEach((t, i) => todSec.appendChild(el('div', { class: 'tod-row' }, [
+    el('span', { class: 'tod-rank', text: '#' + (i + 1) }),
+    el('span', { class: 'tod-emoji', text: t.emoji }),
+    el('span', { class: 'tod-label', text: t.label }),
+    el('span', { class: 'tod-count', text: t.sessions + ' sessions' }),
+  ])));
+  if (!(dl.time_of_day || []).length) todSec.appendChild(el('div', { class: 'empty', text: 'Not enough data yet.' }));
+  root.appendChild(todSec);
+
+  const moSec = el('div', { class: 'pat-section' }, [el('h2', { class: 'pat-h', text: '📈 Project momentum (last 4 weeks)' })]);
+  (mo.momentum || []).slice(0, 10).forEach((m) => {
+    const badge = { rising: '↑ rising', stalling: '↓ stalling', steady: '→ steady' }[m.momentum];
+    moSec.appendChild(el('div', { class: 'mom-row ' + m.momentum }, [
+      el('span', { class: 'mom-name', text: m.project_name }),
+      el('span', { class: 'mom-counts', text: `${m.older} → ${m.recent}` }),
+      el('span', { class: 'mom-badge ' + m.momentum, text: badge }),
+    ]));
+  });
+  if (!(mo.momentum || []).length) moSec.appendChild(el('div', { class: 'empty', text: 'No recent project activity.' }));
+  root.appendChild(moSec);
+
+  view().innerHTML = ''; view().appendChild(root);
+}
+
+// ---- view: developer dashboard (hidden — ?dev=1 or Shift+D) ---------------
+// Runs `python -m claudestudio --selftest` server-side and streams each line
+// over SSE, rendering green ✓ / red ✗ rows. Development-only UX; invisible to
+// users who don't know the shortcut. No impact on the index.
+async function viewDev() {
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [el('div', {}, [
+    el('h1', { class: 'page-title', text: 'Developer' }),
+    el('div', { class: 'page-sub', text: 'Run the built-in self-test and watch it stream. Contributors + demo mode only.' }),
+  ])]));
+  const status = el('div', { class: 'dev-status', role: 'status', 'aria-live': 'polite', text: 'Idle' });
+  const out = el('div', { class: 'dev-selftest-out', role: 'log' });
+  const runBtn = el('button', { class: 'btn-primary', text: '▶ Run self-test' });
+  root.appendChild(el('div', { class: 'dev-bar' }, [runBtn, status]));
+  root.appendChild(out);
+  view().innerHTML = ''; view().appendChild(root);
+
+  let es = null;
+  runBtn.addEventListener('click', () => {
+    if (es) { es.close(); es = null; }
+    out.innerHTML = ''; status.textContent = 'Running…'; runBtn.disabled = true;
+    es = new EventSource('/api/dev/selftest');
+    es.onmessage = (ev) => {
+      let d; try { d = JSON.parse(ev.data); } catch { return; }
+      if (d.type === 'line') {
+        const t = d.text || '';
+        const cls = /FAIL|✗/.test(t) ? 'dev-line bad' : (/pass|ALLPASS|✓/.test(t) ? 'dev-line good' : 'dev-line');
+        out.appendChild(el('div', { class: cls, text: t }));
+        out.scrollTop = out.scrollHeight;
+      } else if (d.type === 'done') {
+        status.textContent = d.code === 0 ? '✓ ALLPASS' : '✗ FAILED (exit ' + d.code + ')';
+        status.className = 'dev-status ' + (d.code === 0 ? 'good' : 'bad');
+        runBtn.disabled = false; es.close(); es = null;
+      } else if (d.type === 'error') {
+        out.appendChild(el('div', { class: 'dev-line bad', text: 'launch error: ' + d.text }));
+        runBtn.disabled = false; es.close(); es = null;
+      }
+    };
+    es.onerror = () => { status.textContent = 'stream ended'; runBtn.disabled = false; if (es) { es.close(); es = null; } };
+  });
+}
+
+// register the service worker so the static shell loads instantly (offline state
+// with a retry when the Python server isn't up). Best-effort — never blocks boot.
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').catch(() => { /* offline shell is optional */ });
+}
+
 // ---- boot -----------------------------------------------------------------
 window.__cs = { go, ss: () => sessionsState, claudeMd: openClaudeMdModal };
 window.addEventListener('hashchange', router);
@@ -1791,6 +2049,11 @@ document.addEventListener('click', (e) => {
   if (_bmPop && !_bmPop.contains(e.target) && !(e.target.closest && e.target.closest('.bm-btn'))) closeBookmarkPopover();
 });
 document.addEventListener('keydown', (e) => {
+  // Shift+D opens the hidden Developer view (self-test dashboard).
+  if (e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'D' || e.key === 'd')) {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag !== 'input' && tag !== 'textarea' && !e.target.isContentEditable) { e.preventDefault(); go('dev'); return; }
+  }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); CMDK.open ? closeCmdk() : openCmdk(); return; }
   if (!CMDK.open) return;
   if (e.key === 'Escape') closeCmdk();
@@ -1805,8 +2068,12 @@ document.addEventListener('keydown', (e) => {
   $('#cmdk').addEventListener('click', (e) => { if (e.target.id === 'cmdk') closeCmdk(); });
   $('#cmdk-input').addEventListener('input', (e) => { clearTimeout(cmdkTimer); cmdkTimer = setTimeout(() => cmdkRender(e.target.value.trim()), 160); });
   renderNav(null);
+  registerServiceWorker();
   await loadSummary();
-  if (!location.hash) location.hash = '#/sessions';
+  if (!location.hash) {
+    // ?dev=1 deep-links straight into the hidden Developer view
+    location.hash = new URLSearchParams(location.search).get('dev') === '1' ? '#/dev' : '#/sessions';
+  }
   router();
   startLiveUpdates();
   checkBudget();

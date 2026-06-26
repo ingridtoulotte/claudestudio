@@ -13,6 +13,8 @@ Explore, search, replay, and understand every Claude Code session — all on you
 ![Local-first](https://img.shields.io/badge/data-100%25%20local-ff8a5b)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-9a8cff)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+[![Changelog](https://img.shields.io/badge/changelog-read-9a8cff)](CHANGELOG.md)
+[![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-9a8cff)](https://claude.ai/code)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
@@ -21,6 +23,10 @@ Explore, search, replay, and understand every Claude Code session — all on you
 [![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
 [Highlights](#-highlights) · [Quickstart](#-quickstart) · [Auto-index (hooks)](#-auto-index-with-claude-code-hooks) · [Live updates](#-live-updates) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [CLI](#-cli) · [Community](#-community) · [FAQ](#-faq)
+
+<br/>
+
+> 🤖 **Built for the Claude Code ecosystem.** ClaudeStudio is the workspace that makes your Claude Code sessions searchable, replayable, and understandable — 100% local, zero dependencies, and designed to compose with Claude Code's MCP, hooks, and CLI.
 
 <br/>
 
@@ -57,6 +63,26 @@ Explore, search, replay, and understand every Claude Code session — all on you
 
 ---
 
+## 🆕 What's new in v0.6.0
+
+The **workspace, completed.** Schema migrates in place to **v4**; self-test **396 → 495**; MCP **14 → 16 tools**.
+
+- **Time-machine replay with speed control** — scrub at `0.5× / 1× / 2× / 5× / ∞`, a CSS typewriter reveal, "jump to first error", and an end-of-playback summary card. ([`docs/REPLAY.md`](docs/REPLAY.md))
+- **Cross-session references** — finds prompts like *"as we did last time"* and proposes the session you meant (`/api/cross-refs`, MCP `get_cross_refs`).
+- **Prompt effectiveness score** — a deterministic 0–100 score per prompt from what happened next, shown as a bar in the Prompt Library.
+- **Multi-machine sync (no cloud)** — `claudestudio sync --push/--pull` over git or rsync; only `~/.claudestudio/` is touched. ([`docs/SYNC.md`](docs/SYNC.md))
+- **Installable PWA** — `manifest.json` + a service worker that caches the shell (instant load, offline state) and keeps API data network-first.
+- **Patterns dashboard** — recurring tool workflows as SVG mini-flowcharts, debugging loops, peak hours, and a 4-week project-momentum index.
+- **RSS / Atom feed** — `/api/feed.rss`, `/api/feed.atom`, `claudestudio feed` — pipe your history into any reader or Slack bot.
+- **`claudestudio init`** — a one-command onboarding wizard (hook, watch, budget, self-test); `--yes` for non-interactive.
+- **GitHub deep linker** — detects `#123` / `owner/repo#456` / URLs at index time; a references card + `find_sessions_by_github_ref` (MCP #16). Schema **v4** table.
+- **CHANGELOG draft generator** — `claudestudio changelog-draft` sorts the git log since the last tag into Added/Changed/Fixed/Security.
+- **Developer self-test dashboard** — hidden `?dev=1` / `Shift+D` view that streams the self-test over SSE.
+- **WCAG 2.1 AA pass** — focus rings, `aria-label`s (CI-enforced), keyboard-operable replay slider, `role="status"` toast, per-route `<title>`. ([`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md))
+- **Community-grade infra** — issue forms, PR template, 5×3 CI matrix, CodeQL, Dependabot, stale bot.
+
+<details><summary>What's new in v0.5.2</summary>
+
 ## 🆕 What's new in v0.5.2
 
 - **Session health scores** — a deterministic 0–100 grade per session (`health.py`), cached on the index, shown as an A–F dot in the list and a breakdown card in the detail view. `list --sort health`.
@@ -70,6 +96,8 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - **Keyboard navigation** — `web/keyboard.js` (`KeyboardNavigator`, `?` cheat sheet).
 - **Four new MCP tools** (10 → **14**): `get_cost_by_period`, `get_diff_for_session`, `get_annotations`, `generate_project_brief`.
 - **Full API reference** at [`docs/API.md`](docs/API.md). Self-test grew 301 → **396** checks; schema **v3**.
+
+</details>
 
 ## 🛠 For power users
 
@@ -299,7 +327,7 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 | Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
 | Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ✅ deterministic |
 | Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 14 tools      |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ✅ 16 tools      |
 | Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ✅               |
 | Inline file diffs in replay   | ❌                | ❌             | ❌                 | ⚠️                  | ✅               |
 | Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ✅               |
@@ -389,7 +417,7 @@ python -m claudestudio [command]
   demo           generate synthetic data & explore --count N --serve
   budget         track spend against a monthly/weekly ceiling
   generate-claude-md   write a CLAUDE.md from a project's history
-  --selftest     run the built-in correctness suite (396 checks, no deps)
+  --selftest     run the built-in correctness suite (495 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
@@ -434,12 +462,27 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] **CLAUDE.md generator** + **session annotations** — _v0.5.2_
 - [x] **Efficiency dashboard**, **prompt library**, **git context** — _v0.5.2_
 - [x] **Keyboard navigation** + cheat sheet — _v0.5.2_
-- [ ] Tauri native window + installers
-- [ ] Webhook / notification system for budget alerts
-- [ ] Public session sharing (opt-in, encrypted link)
+- [x] **Time-machine replay** with speed control + jump-to-error — _v0.6.0_
+- [x] **Cross-session references** + **GitHub issue/PR deep linker** — _v0.6.0_
+- [x] **Prompt effectiveness score** — _v0.6.0_
+- [x] **Multi-machine sync** via git/rsync (no cloud) — _v0.6.0_
+- [x] **PWA** (installable, offline shell) — _v0.6.0_
+- [x] **Pattern-mining dashboard** (workflows, debug loops, momentum) — _v0.6.0_
+- [x] **RSS / Atom feed** — _v0.6.0_
+- [x] **`claudestudio init`** onboarding wizard — _v0.6.0_
+- [x] **CHANGELOG draft generator** + **dev self-test dashboard** — _v0.6.0_
+- [x] **WCAG 2.1 AA** accessibility pass — _v0.6.0_
+- [ ] Tauri native window + signed installers (`.dmg`, `.msi`)
+- [ ] Homebrew formula (`brew install claudestudio`)
+- [ ] VS Code extension with session deep-link support
+- [ ] Webhook / push notification system (budget alerts, session completion)
+- [ ] Public session sharing (opt-in, locally encrypted link, no cloud backend)
+- [ ] i18n foundations (extractable string table)
 - [ ] Plugin API for custom analytics modules
-- [ ] VS Code extension for deep-linking from the editor
-- [ ] Homebrew formula
+- [ ] Team/org mode (shared read-only index over local network)
+- [ ] AI-assisted session summarization (opt-in, explicit user action)
+- [ ] Obsidian plugin for linking sessions to notes
+- [ ] Raycast extension for quick session search
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).
 
@@ -527,7 +570,16 @@ python -m claudestudio --selftest   # must print ALLPASS before you push
 python -m claudestudio demo --serve # iterate on the UI against synthetic data
 ```
 
-No dependencies to install, no build step to learn. See [CONTRIBUTING.md](CONTRIBUTING.md).
+No dependencies to install, no build step to learn. New here? See
+[**Contributing in 5 minutes**](CONTRIBUTING.md#-contributing-in-5-minutes) for
+specific starter tasks, and [docs/CLAUDE_CODE_INTEGRATION.md](docs/CLAUDE_CODE_INTEGRATION.md)
+for the full Claude Code integration story.
+
+## 🌟 Community showcase
+
+> Built something cool with ClaudeStudio? [Open a Discussion](https://github.com/ingridtoulotte/claudestudio/discussions) to get featured here!
+
+Using ClaudeStudio in your daily workflow? Add yourself to [USERS.md](USERS.md) via a PR.
 
 ## 📄 License
 

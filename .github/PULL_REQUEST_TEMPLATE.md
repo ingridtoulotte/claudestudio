@@ -1,15 +1,17 @@
-## What & why
+## What does this PR do?
 
-<!-- What does this change, and what problem does it solve? Link any related issue. -->
+<!-- One paragraph summary. Link any related issue. -->
 
 ## Checklist
 
 - [ ] `python -m claudestudio --selftest` prints **ALLPASS**
-- [ ] No new runtime dependencies (Python stdlib + vanilla JS/CSS only)
+- [ ] New behavior is covered by at least one new self-test check
+- [ ] No new runtime dependencies added (Python stdlib + vanilla JS/CSS only)
 - [ ] No outbound network calls; the server still binds to `127.0.0.1`
-- [ ] Behavioral changes are covered by a check in `selftest.py`
-- [ ] New / changed UI still feels as polished as the rest (every screen is a screenshot)
+- [ ] Tested on [ ] Linux [ ] macOS [ ] Windows (check all that apply)
+- [ ] `docs/API.md` updated if any endpoint was added/changed
+- [ ] `CHANGELOG.md` entry added under `[Unreleased]`
 
-## Notes for the reviewer
+## Screenshots (if UI changes)
 
-<!-- Anything to watch for, before/after screenshots for UI changes, etc. -->
+<!-- Drag and drop screenshots here — use `demo --serve` for synthetic data. -->

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.5.2"
+version = "0.6.0"
 description = "The desktop workspace for Claude Code — explore, search and replay every session, with a built-in MCP server, tool-usage analytics and smart highlights, locally."
 readme = "README.md"
 requires-python = ">=3.9"

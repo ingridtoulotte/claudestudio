@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.11", "3.12"]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +30,9 @@ jobs:
 
       - name: Smoke test — build demo index
         run: python -m claudestudio demo --count 8
+
+      - name: Smoke test — stats on an empty index
+        run: python -m claudestudio stats --db "${{ runner.temp }}/empty.db"
 
       - name: Smoke test — API layer boots & serves
         shell: bash

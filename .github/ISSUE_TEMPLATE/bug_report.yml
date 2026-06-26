@@ -1,0 +1,60 @@
+name: 🐞 Bug report
+description: Something isn't working the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! ClaudeStudio is 100% local — the more of the
+        environment + self-test output you paste below, the faster this gets fixed.
+  - type: input
+    id: version
+    attributes:
+      label: ClaudeStudio version
+      description: Output of `claudestudio --version`
+      placeholder: "claudestudio 0.6.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "Windows 11 / macOS 14 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python --version`
+      placeholder: "3.12.3"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `claudestudio …`
+        2. Open the … view
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual behavior
+      placeholder: "I expected … but instead …"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`python -m claudestudio doctor` output"
+      render: text
+  - type: textarea
+    id: selftest
+    attributes:
+      label: "`python -m claudestudio --selftest` result"
+      description: "Paste ALLPASS, or the first failing check."
+      render: text

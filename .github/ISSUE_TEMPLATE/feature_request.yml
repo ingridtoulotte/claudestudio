@@ -1,0 +1,42 @@
+name: ✨ Feature request
+description: Suggest an idea for ClaudeStudio
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ClaudeStudio's core invariants are **zero runtime dependencies**, **100%
+        local**, and **deterministic**. Features that hold those lines ship faster.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve for you?
+      placeholder: "When I …, I can't …"
+    validations:
+      required: true
+  - type: dropdown
+    id: thirdparty
+    attributes:
+      label: Does this require a third-party dependency?
+      description: "A hard 'no' is a great answer — the backend is stdlib-only."
+      options:
+        - "No — it can be done with the standard library / vanilla JS"
+        - "Maybe — not sure"
+        - "Yes — it would need a new dependency"
+    validations:
+      required: true
+  - type: dropdown
+    id: offline
+    attributes:
+      label: Would this work fully offline / local-first?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: sketch
+    attributes:
+      label: "Optional: sketch of the API / CLI surface"
+      render: text

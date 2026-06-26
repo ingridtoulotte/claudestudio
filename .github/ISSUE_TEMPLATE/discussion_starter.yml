@@ -1,0 +1,26 @@
+name: 💬 Idea / question / show & tell
+description: A lightweight prompt for ideas, questions, or sharing what you built
+labels: ["discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not a bug, not a fully-formed feature — just an idea, a question, or
+        something cool you built with ClaudeStudio. (For longer threads, consider
+        opening a [Discussion](https://github.com/ingridtoulotte/claudestudio/discussions).)
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is this?
+      options:
+        - "💡 An idea"
+        - "❓ A question"
+        - "🎉 Show & tell"
+    validations:
+      required: true
+  - type: textarea
+    id: body
+    attributes:
+      label: Tell us more
+    validations:
+      required: true

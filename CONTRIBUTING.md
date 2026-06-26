@@ -28,6 +28,27 @@ python -m claudestudio doctor
 
 There is nothing to install and nothing to build. Edit a file, refresh the page.
 
+## 🤝 Contributing in 5 minutes
+
+New here and want a real first PR? Any of these is achievable in under an hour and
+holds the zero-dependency, local-first line:
+
+1. **Add a reference phrase.** `cross_ref.py` detects "as we did last time"-style
+   prompts. Add a phrasing you actually use to `_PHRASES`, plus an assertion in
+   `selftest.py`. Great first look at a self-contained module + its test.
+2. **Add a tool icon.** The replay tool cards in `web/app.js` (`TOOL_ICON`) map a
+   tool name to an emoji. Add one for a tool that currently falls back to ⚙️.
+3. **Add a CHANGELOG-draft keyword.** `changelog_draft.py` sorts commits by keyword.
+   Add a trigger (e.g. `"deps"` → Changed) and pin it with a `classify` assertion.
+4. **Capture a screenshot.** Follow [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) to
+   regenerate a view from `demo --serve` and drop it in `docs/screenshots/`.
+5. **Document an endpoint.** Pick an endpoint in `server.py` that's thin in
+   [docs/API.md](docs/API.md) and flesh out its params + response example.
+
+These are labelled `good first issue` in the tracker. Comment on the issue to claim
+it, then open a PR — the [PR template](.github/PULL_REQUEST_TEMPLATE.md) has the
+checklist.
+
 ## Project layout
 
 ```

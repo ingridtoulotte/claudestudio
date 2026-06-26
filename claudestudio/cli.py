@@ -728,6 +728,118 @@ def cmd_ask(args):
     return 0
 
 
+def cmd_sync(args):
+    """Push/pull the ~/.claudestudio index across machines via git or rsync."""
+    from . import sync as syncmod
+    state_dir = os.path.dirname(os.path.abspath(args.db))
+    print(BANNER)
+    if args.status:
+        st = syncmod.status(state_dir)
+        print(f"  state dir   : {st['state_dir']}")
+        print(f"  git repo    : {st['is_git_repo']}")
+        print(f"  method      : {st['method'] or '—'}")
+        print(f"  remote      : {st['remote'] or '—'}")
+        print(f"  last push   : {_fmt_day(st['last_push']) if st['last_push'] else 'never'}")
+        print(f"  last pull   : {_fmt_day(st['last_pull']) if st['last_pull'] else 'never'}")
+        print(f"  bytes       : {st['bytes'] or 0:,}")
+        print(f"  conflict    : {st['conflict']}")
+        return 0
+    action = "push" if args.push else ("pull" if args.pull else None)
+    if not action:
+        print("  Pick one of:  --push | --pull | --status")
+        return 1
+    res = syncmod.sync(action, state_dir=state_dir, remote=args.remote,
+                       method=args.method, dry_run=args.dry_run)
+    if res.get("dry_run"):
+        print(f"  dry run · {action} via {res['method']}"
+              + (f" → {args.remote}" if args.remote else ""))
+        for c in res["commands"]:
+            print(f"    $ {c}")
+        print("\n  (no commands were executed)")
+        return 0
+    if res.get("error"):
+        print(f"  ✗ {res['error']}")
+        return 1
+    if res.get("ok"):
+        extra = " (nothing new to commit)" if res.get("no_changes") else ""
+        print(f"  ✓ {action} via {res['method']} complete{extra}")
+        if res.get("bytes"):
+            print(f"    {res['bytes']:,} bytes under {state_dir}")
+        return 0
+    print(f"  ✗ {action} failed"
+          + (" — conflict detected (resolve manually)" if res.get("conflict") else ""))
+    for line in res.get("output", [])[-6:]:
+        print(f"    {line}")
+    return 1
+
+
+def cmd_changelog_draft(args):
+    """Draft a CHANGELOG entry from the git log since the last version tag."""
+    from . import changelog_draft
+    res = changelog_draft.generate(version=args.version, date=args.date or None)
+    if not res["available"]:
+        print("  git is not available here — cannot read the commit log. "
+              "Install git or run inside a repo.")
+        return 0
+    if args.out and args.out != "-":
+        dest = _safe_out_path(args.out, "CHANGELOG.draft.md")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(res["draft"])
+        print(f"  draft → {dest}  ({res['count']} commit(s) since "
+              f"{res['tag'] or 'the start'})")
+        return 0
+    sys.stdout.write(res["draft"])
+    return 0
+
+
+def _stdin_feed():
+    while True:
+        try:
+            yield input()
+        except EOFError:
+            return
+
+
+def cmd_init(args):
+    """Interactive onboarding wizard (use --yes for all-defaults, non-interactive)."""
+    from . import init_wizard
+    actions = init_wizard.WizardActions(args.db, _split_roots(args.root))
+    print(BANNER)
+    init_wizard.run_wizard(actions, assume_yes=args.yes,
+                           inputs=None if args.yes else _stdin_feed())
+    if args.open:
+        actions.open_app()
+    return 0
+
+
+def cmd_feed(args):
+    """Print the local RSS feed URL (and a subscribing tip), or write the feed."""
+    from . import feed
+    if args.out:
+        conn = index.connect(args.db)
+        xml = feed.build_atom(conn) if args.atom else feed.build_rss(conn)
+        conn.close()
+        if args.out == "-":
+            sys.stdout.write(xml)
+            return 0
+        dest = _safe_out_path(args.out, "claudestudio-feed." + ("atom" if args.atom else "rss"))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(xml)
+        print(f"  feed → {dest}")
+        return 0
+    print(BANNER)
+    base = f"http://{args.host}:{args.port}"
+    print("  Your sessions, as a feed (served while `claudestudio serve` is running):")
+    print(f"    RSS  : {base}/api/feed.rss")
+    print(f"    Atom : {base}/api/feed.atom")
+    print("\n  Filters: ?project=<name>  ?since=YYYY-MM-DD  ?limit=N")
+    print("  Tip: subscribe in any RSS reader that can reach localhost, or pipe it "
+          "into a Slack/email bot.")
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -843,6 +955,39 @@ def build_parser():
     p = sub.add_parser("mcp", help="run the MCP server (JSON-RPC 2.0 over stdio)")
     _add_common(p)
     p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("init", help="zero-friction onboarding wizard (hook, watch, budget)")
+    _add_common(p)
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="accept every default, non-interactive")
+    p.add_argument("--open", action="store_true", help="open the app when finished")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("sync", help="sync the index across machines via git/rsync (no cloud)")
+    _add_common(p)
+    p.add_argument("--push", action="store_true", help="push the local index to the remote")
+    p.add_argument("--pull", action="store_true", help="pull the index from the remote")
+    p.add_argument("--status", action="store_true", help="show last push/pull + conflict state")
+    p.add_argument("--remote", default="", help="git URL or rsync host:path target")
+    p.add_argument("--method", default="auto", choices=["auto", "git", "rsync"],
+                   help="sync backend (default: auto-detect)")
+    p.add_argument("--dry-run", action="store_true", help="print commands without running them")
+    p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("feed", help="print the local RSS/Atom activity-feed URL")
+    _add_common(p)
+    p.add_argument("--atom", action="store_true", help="with --out, emit Atom instead of RSS")
+    p.add_argument("--out", default=None, help="write the feed to a file ('-' for stdout)")
+    p.add_argument("--port", type=int, default=8787)
+    p.add_argument("--host", default="127.0.0.1")
+    p.set_defaults(func=cmd_feed)
+
+    p = sub.add_parser("changelog-draft",
+                       help="draft a CHANGELOG entry from the git log since the last tag")
+    p.add_argument("--version", default="Unreleased", help="version header (default: Unreleased)")
+    p.add_argument("--date", default=None, help="release date for the header (YYYY-MM-DD)")
+    p.add_argument("--out", default=None, help="write here ('-' or omit for stdout)")
+    p.set_defaults(func=cmd_changelog_draft)
 
     p = sub.add_parser("highlights", help="surface interesting moments from your history")
     _add_common(p)

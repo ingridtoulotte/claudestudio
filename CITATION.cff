@@ -8,10 +8,14 @@ authors:
 repository-code: "https://github.com/ingridtoulotte/claudestudio"
 url: "https://github.com/ingridtoulotte/claudestudio"
 license: MIT
-version: "0.6.2"
+version: "0.7.0"
+date-released: "2026-06-27"
 keywords:
   - claude-code
   - mcp
   - local-first
   - developer-tools
   - session-analytics
+  - ai-analysis
+  - semantic-search
+  - clustering

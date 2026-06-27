@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.6.3"
-description = "The desktop workspace for Claude Code — explore, search and replay every session, with a built-in MCP server, tool-usage analytics and smart highlights, locally."
+version = "0.7.0"
+description = "The desktop workspace for Claude Code — explore, search, replay and cluster every session, with optional AI insights, local semantic search, a built-in MCP server, tool-usage analytics and smart highlights, all 100% local."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Ingrid Toulotte" }]
-keywords = ["claude", "claude-code", "anthropic", "mcp", "llm", "developer-tools", "session-browser", "local-first", "analytics", "bookmarks", "hooks", "live-watch", "diff-view", "report", "budget-tracker", "claude-md-generator", "session-annotations", "health-score", "prompt-library", "tags", "labels", "narrative", "digest", "heatmap", "benchmark", "plugins", "plugin-registry", "share", "themes", "session-resume", "session-compare", "error-taxonomy", "outcome-trace", "webhooks", "budget-forecast", "claude-md-verify", "insight-engine", "session-templates", "github-actions", "mobile", "search-history", "tool-chains", "onboarding"]
+keywords = ["claude", "claude-code", "anthropic", "mcp", "llm", "developer-tools", "session-browser", "local-first", "analytics", "bookmarks", "hooks", "live-watch", "diff-view", "report", "budget-tracker", "claude-md-generator", "session-annotations", "health-score", "prompt-library", "tags", "labels", "narrative", "digest", "heatmap", "benchmark", "plugins", "plugin-registry", "share", "themes", "session-resume", "session-compare", "error-taxonomy", "outcome-trace", "webhooks", "budget-forecast", "claude-md-verify", "insight-engine", "session-templates", "github-actions", "mobile", "search-history", "tool-chains", "onboarding", "ai-analysis", "semantic-search", "clustering", "jupyter", "shell-completion", "context-analysis", "model-analytics"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",

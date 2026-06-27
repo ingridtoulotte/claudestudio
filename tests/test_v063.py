@@ -29,9 +29,9 @@ from claudestudio import (
 # --- schema v7 -------------------------------------------------------------
 
 
-def test_schema_is_v7(empty_db):
-    assert index.SCHEMA_VERSION == 7
-    assert index.stored_schema_version(empty_db) == 7
+def test_schema_is_v8(empty_db):
+    assert index.SCHEMA_VERSION == 8
+    assert index.stored_schema_version(empty_db) == 8
     cols = {r[1] for r in empty_db.execute("PRAGMA table_info(search_history)")}
     assert {"query", "kind", "project", "result_count", "searched_at"} <= cols
 

@@ -1538,6 +1538,255 @@ def cmd_template(args):
     return 1
 
 
+# ---------------------------------------------------------------------------
+# v0.7.0 — Intelligence Layer
+# ---------------------------------------------------------------------------
+
+def _emit_text(text, args):
+    """Print text and honour --copy / --out when present on the namespace."""
+    print(text)
+    if getattr(args, "copy", False):
+        if _copy_to_clipboard(text):
+            print("  ✓ copied to clipboard", file=sys.stderr)
+        else:
+            print("  (clipboard unavailable)", file=sys.stderr)
+    out = getattr(args, "out", None)
+    if out:
+        path = _safe_out_path(out, "claudestudio-output.txt")
+        path.write_text(text, encoding="utf-8")
+        print(f"  ✓ wrote {path}", file=sys.stderr)
+
+
+def cmd_ai_summary(args):
+    from . import ai_analysis
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        res = ai_analysis.summarize_session(conn, sid)
+    finally:
+        conn.close()
+    if res.get("status") == 402 or res.get("error") == "ANTHROPIC_API_KEY not set":
+        print("  ✗ AI features are opt-in. Set ANTHROPIC_API_KEY to enable them.",
+              file=sys.stderr)
+        return 2
+    if res.get("error"):
+        print(f"  ✗ {res['error']}", file=sys.stderr)
+        return 1
+    if args.json:
+        _emit_text(json.dumps(res, indent=2, default=str), args)
+        return 0
+    lines = [f"\n  {res['summary']}\n"]
+    if res.get("coaching_tips"):
+        lines.append("  Coaching tips:")
+        lines += [f"    • {t}" for t in res["coaching_tips"]]
+    if res.get("improvement_suggestions"):
+        lines.append("  Improvement suggestions:")
+        lines += [f"    {i + 1}. {s}" for i, s in enumerate(res["improvement_suggestions"])]
+    lines.append(f"\n  ({res['model_used']} · {res['tokens_used']} tokens · "
+                 f"${res['cost_usd']:.4f}{' · cached' if res.get('cached') else ''})")
+    _emit_text("\n".join(lines), args)
+    return 0
+
+
+def cmd_ai_coach(args):
+    from . import ai_analysis
+    conn = index.connect(args.db)
+    try:
+        res = ai_analysis.coach(conn, getattr(args, "n", 20))
+    finally:
+        conn.close()
+    if res.get("status") == 402:
+        print("  ✗ AI features are opt-in. Set ANTHROPIC_API_KEY to enable them.",
+              file=sys.stderr)
+        return 2
+    _emit_text(res.get("report", ""), args)
+    return 0
+
+
+def cmd_ai_prompt(args):
+    from . import ai_analysis
+    conn = index.connect(args.db)
+    try:
+        res = ai_analysis.improve_prompt(conn, args.prompt)
+    finally:
+        conn.close()
+    if res.get("status") == 402:
+        print("  ✗ AI features are opt-in. Set ANTHROPIC_API_KEY to enable them.",
+              file=sys.stderr)
+        return 2
+    out = (f"\n  Original:\n    {res['original']}\n\n  Improved:\n    {res['improved']}\n"
+           f"\n  Projected effectiveness delta: +{res['projected_delta']:.2f}")
+    _emit_text(out, args)
+    return 0
+
+
+def cmd_similar(args):
+    from . import semantic
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        semantic.build_vectors(conn)  # persist so later runs are instant
+        res = semantic.similar(conn, sid, top=args.top)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(res, indent=2, default=str))
+        return 0
+    if not res:
+        print("  No similar sessions found (try indexing more sessions).")
+        return 0
+    print(f"\n  Sessions similar to {sid[:12]}:\n")
+    for r in res:
+        print(f"  {r['score']:.3f}  {r['title'][:50]:50}  {r['reason']}")
+    print()
+    return 0
+
+
+def cmd_clusters(args):
+    from . import clustering
+    conn = index.connect(args.db)
+    try:
+        res = clustering.cluster_sessions(conn, args.k, refresh=True)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(res, indent=2, default=str))
+        return 0
+    print(f"\n  {len(res['clusters'])} topic clusters:\n")
+    for cl in res["clusters"]:
+        print(f"  ▸ {cl['label']}  ({cl['count']} sessions · "
+              f"avg ${cl['avg_cost']:.3f} · health {cl['avg_health']})")
+        for s in cl["sessions"]:
+            print(f"      {s['title'][:54]:54}  health {s['health']}")
+    print()
+    return 0
+
+
+def cmd_watch_session(args):
+    from . import live_session
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        path = live_session.resolve_session_path(conn, sid)
+    finally:
+        conn.close()
+    if not path:
+        print(f"  ✗ no session file for {sid}", file=sys.stderr)
+        return 1
+    res = live_session.tail_events(path, since_line=0)
+    for ev in res["events"]:
+        print("  " + live_session.format_event(ev))
+    live = "LIVE" if live_session.is_live(path) else "idle"
+    print(f"\n  [{live}] {len(res['events'])} events through line {res['next_line']}.")
+    return 0
+
+
+def cmd_context_analysis(args):
+    from . import context_analyzer
+    conn = index.connect(args.db)
+    try:
+        sid = _last_session_id(conn) if args.last else args.session_id
+        if not sid:
+            print("  No session specified. Pass a <session_id> or --last.",
+                  file=sys.stderr)
+            return 1
+        res = context_analyzer.analyze_session(conn, sid)
+    finally:
+        conn.close()
+    if res.get("error"):
+        print(f"  ✗ {res['error']}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(res, indent=2, default=str))
+        return 0
+    print(f"\n  Context utilization — {res['model'] or 'unknown model'} "
+          f"(limit {res['model_limit']:,} tokens)\n")
+    print(context_analyzer.ascii_chart(res["turns"]))
+    flag = "  ⚠ waste indicator: many turns use <10% of the window" if res["waste_indicator"] else ""
+    print(f"\n  avg {res['avg_utilization_pct']}%  peak {res['peak_utilization_pct']}%{flag}\n")
+    return 0
+
+
+def cmd_model_stats(args):
+    from . import model_analytics
+    conn = index.connect(args.db)
+    try:
+        res = model_analytics.models_payload(conn)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(res, indent=2, default=str))
+        return 0
+    print(f"\n  {'model':28} {'sessions':>8} {'total $':>10} {'avg $':>8} "
+          f"{'health':>7} {'tool ok':>8}")
+    for m in res["models"]:
+        print(f"  {m['model'][:28]:28} {m['session_count']:>8} "
+              f"{m['total_cost_usd']:>10.4f} {m['avg_cost_usd']:>8.4f} "
+              f"{m['avg_health_score']:>7} {m['tool_success_rate']:>8.3f}")
+    print(f"\n  {res['recommendation']}\n")
+    return 0
+
+
+def cmd_annotations(args):
+    from . import collab_annotations
+    conn = index.connect(args.db)
+    try:
+        if args.action == "export":
+            data = collab_annotations.export_annotations(conn)
+            text = json.dumps(data, indent=2, default=str)
+            if args.out:
+                path = _safe_out_path(args.out, "annotations.json")
+                path.write_text(text, encoding="utf-8")
+                print(f"  ✓ exported {len(data['annotations'])} annotations to {path}")
+            else:
+                print(text)
+            return 0
+        if args.action == "import":
+            if not args.file:
+                print("  Pass the annotations JSON file to import.", file=sys.stderr)
+                return 1
+            with open(args.file, encoding="utf-8") as fh:
+                data = json.load(fh)
+            strategy = "replace" if args.replace else "merge"
+            res = collab_annotations.import_annotations(conn, data, strategy)
+            print(f"  Imported {res['imported']} annotations, "
+                  f"skipped {res['skipped']} (strategy: {strategy}).")
+            return 0
+    finally:
+        conn.close()
+    print(f"  Unknown action: {args.action}", file=sys.stderr)
+    return 1
+
+
+def cmd_completions(args):
+    from . import completions
+    if args.action == "install":
+        info = completions.install(args.shell)
+        print(f"  ✓ installed {info['shell']} completions to {info['path']} "
+              f"({info['bytes']} bytes)")
+        print("  Restart your shell or source the file to activate.")
+        return 0
+    shell = args.action  # bash | zsh | fish
+    try:
+        print(completions.render(shell))
+    except ValueError as exc:
+        print(f"  ✗ {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -1605,7 +1854,7 @@ def build_parser():
     _add_common(p)
     p.add_argument("session_id", nargs="?", default=None,
                    help="session id (see `serve` or `index`); omit with --all")
-    p.add_argument("--format", choices=["md", "markdown", "html", "json"], default="md")
+    p.add_argument("--format", choices=["md", "markdown", "html", "json", "ipynb"], default="md")
     p.add_argument("--out", default=None, help="output file ('-' for stdout)")
     p.add_argument("--all", action="store_true", help="export every indexed session")
     p.add_argument("--project", default=None,
@@ -1872,6 +2121,83 @@ def build_parser():
     p.add_argument("--no-context", action="store_true",
                    help="don't fill {auto-context} from history")
     p.set_defaults(func=cmd_template)
+
+    # --- v0.7.0: Intelligence Layer ---
+    p = sub.add_parser("ai-summary",
+                       help="AI summary of a session (opt-in; needs ANTHROPIC_API_KEY)")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", default=None)
+    p.add_argument("--last", action="store_true", help="use the most recent session")
+    p.add_argument("--copy", action="store_true", help="copy the output to the clipboard")
+    p.add_argument("--out", default=None, metavar="FILE", help="also write to FILE")
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.set_defaults(func=cmd_ai_summary)
+
+    p = sub.add_parser("ai-coach",
+                       help="AI coaching report on your recent sessions (opt-in)")
+    _add_common(p)
+    p.add_argument("-n", type=int, default=20, help="sessions to analyze (default 20)")
+    p.add_argument("--copy", action="store_true", help="copy the output to the clipboard")
+    p.add_argument("--out", default=None, metavar="FILE", help="also write to FILE")
+    p.set_defaults(func=cmd_ai_coach)
+
+    p = sub.add_parser("ai-prompt",
+                       help="rewrite a prompt for better Claude Code results (opt-in)")
+    _add_common(p)
+    p.add_argument("prompt", help="the raw prompt to improve")
+    p.add_argument("--copy", action="store_true", help="copy the output to the clipboard")
+    p.add_argument("--out", default=None, metavar="FILE", help="also write to FILE")
+    p.set_defaults(func=cmd_ai_prompt)
+
+    p = sub.add_parser("similar", help="find sessions semantically similar to one (local TF-IDF)")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", default=None)
+    p.add_argument("--last", action="store_true", help="use the most recent session")
+    p.add_argument("--top", type=int, default=10, help="how many results (default 10)")
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.set_defaults(func=cmd_similar)
+
+    p = sub.add_parser("clusters", help="auto-group your sessions into topic clusters (k-means)")
+    _add_common(p)
+    p.add_argument("--k", type=int, default=8, help="number of clusters (default 8)")
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.set_defaults(func=cmd_clusters)
+
+    p = sub.add_parser("watch-session", help="stream a session's events as they're written")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", default=None)
+    p.add_argument("--last", action="store_true", help="use the most recent session")
+    p.set_defaults(func=cmd_watch_session)
+
+    p = sub.add_parser("context-analysis",
+                       help="per-turn context-window utilization for a session")
+    _add_common(p)
+    p.add_argument("session_id", nargs="?", default=None)
+    p.add_argument("--last", action="store_true", help="use the most recent session")
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.set_defaults(func=cmd_context_analysis)
+
+    p = sub.add_parser("model-stats", help="cost/health/tool-success breakdown by model")
+    _add_common(p)
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.set_defaults(func=cmd_model_stats)
+
+    p = sub.add_parser("annotations", help="export/import your annotation layer (team sharing)")
+    _add_common(p)
+    p.add_argument("action", choices=["export", "import"], help="export or import")
+    p.add_argument("file", nargs="?", default=None, help="annotations JSON file (for import)")
+    p.add_argument("--out", default=None, metavar="FILE", help="output file (for export)")
+    p.add_argument("--replace", action="store_true",
+                   help="import strategy: upsert newest (default is merge)")
+    p.add_argument("--merge", action="store_true", help="import strategy: fill gaps (default)")
+    p.set_defaults(func=cmd_annotations)
+
+    p = sub.add_parser("completions", help="print or install shell tab-completions")
+    p.add_argument("action", choices=["bash", "zsh", "fish", "install"],
+                   help="which shell, or 'install' to auto-detect and write")
+    p.add_argument("--shell", default=None, choices=["bash", "zsh", "fish"],
+                   help="shell to install for (with 'install')")
+    p.set_defaults(func=cmd_completions)
 
     return ap
 

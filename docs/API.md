@@ -16,8 +16,8 @@ dashboards, editor integrations.
 - **Errors:** failures return a JSON body `{"error": "..."}` with an appropriate
   status (`404` not found, `500` on an unexpected error) — never a raw traceback.
 - **Versioning:** the API has been stable since v0.4.0. New endpoints are
-  additive; existing shapes don't break. (This document covers **v0.6.3**,
-  **schema v7**.)
+  additive; existing shapes don't break. (This document covers **v0.7.0**,
+  **schema v8**.)
 
 All responses are `application/json; charset=utf-8` unless noted (CSV, HTML,
 Markdown and ZIP exports set their own content type + `Content-Disposition`).
@@ -379,6 +379,55 @@ One template: `{name, source, body, vars}`. Unknown name → `404`.
 Body `{"vars": {"file": "src/auth.py", "goal": "async"}, "include_context": true}`.
 Returns `{name, rendered, missing, source}`. `{auto-context}` is filled
 deterministically from your history. Unknown name → `404`.
+
+---
+
+## v0.7.0 — Intelligence Layer
+
+### `GET /api/ai/status`
+`{enabled, model, api_key_set, total_ai_calls, total_ai_cost_usd}`. AI features are
+opt-in — `api_key_set` reflects whether `ANTHROPIC_API_KEY` is present.
+
+### `GET /api/session/{id}/ai-summary`
+`{summary, coaching_tips, improvement_suggestions, model_used, tokens_used,
+cost_usd, cached}`. Returns **HTTP 402** `{error: "ANTHROPIC_API_KEY not set",
+status: 402}` when no key is set. Cached after the first call. See
+[AI_ANALYSIS.md](AI_ANALYSIS.md).
+
+### `GET /api/session/{id}/semantic?top=10`
+Local TF-IDF similarity: `{session_id, similar: [{session_id, title, score,
+reason}]}`. See [SEMANTIC_SEARCH.md](SEMANTIC_SEARCH.md). (The older
+`GET /api/session/{id}/similar` endpoint is unchanged.)
+
+### `GET /api/clusters?k=8&refresh=false`
+k-means topic clusters: `{k, clusters: [{id, label, terms, count, avg_cost,
+avg_health, sessions: [{id, title, health}]}]}`. See [CLUSTERING.md](CLUSTERING.md).
+
+### `GET /api/session/{id}/context-analysis`
+Per-turn context utilization: `{turns: [...], avg_utilization_pct,
+peak_utilization_pct, waste_indicator}`. See [CONTEXT_ANALYSIS.md](CONTEXT_ANALYSIS.md).
+
+### `GET /api/efficiency/context`
+Across all sessions: `{avg_utilization_pct, peak_utilization_pct, wasted_sessions}`.
+
+### `GET /api/analytics/models`
+Per-model breakdown plus a recommendation: `{models: [...], recommendation}`. See
+[MODEL_ANALYTICS.md](MODEL_ANALYTICS.md).
+
+### `GET /api/session/{id}/live?since=0`
+New events appended to an active session's `.jsonl`: `{events: [...], next_line,
+is_live, session_id}`. Poll with the returned `next_line` as the next `since`.
+
+### `GET /api/session/{id}/export.ipynb`
+Downloads the session as a Jupyter notebook (nbformat v4),
+`Content-Type: application/json`. See [NOTEBOOK_EXPORT.md](NOTEBOOK_EXPORT.md).
+
+### `GET /api/annotations/export`
+All annotations as a portable JSON payload. See
+[COLLAB_ANNOTATIONS.md](COLLAB_ANNOTATIONS.md).
+
+### `POST /api/annotations/import`
+Body `{"data": {...}, "strategy": "merge"|"replace"}` → `{imported, skipped}`.
 
 ---
 

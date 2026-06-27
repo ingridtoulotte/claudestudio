@@ -21,7 +21,7 @@ from .parser import (
     parse_session,
 )
 
-__version__ = "0.6.3"
+__version__ = "0.7.0"
 __all__ = [
     "__version__",
     "ParsedSession",

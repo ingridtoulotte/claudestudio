@@ -91,6 +91,14 @@ JSON document.
 | `list_registry_plugins` | _(none)_ | The community plugin registry with each plugin's installed status. *(v0.6.3)* |
 | `get_plugin_info` | `name: str` | Full metadata for one registry plugin (description, tags, author, url). *(v0.6.3)* |
 | `get_search_history` | `limit?: int = 20` | The user's recent searches, with result counts and timestamps. *(v0.6.3)* |
+| `get_ai_session_summary` | `session_id: str` | AI summary of a session (goal, approach, quality, 3 improvement suggestions). Opt-in: requires `ANTHROPIC_API_KEY`, else a 402-style error. *(v0.7.0)* |
+| `find_similar_sessions` | `session_id: str`, `top?: int = 10` | Sessions most similar to one, by local TF-IDF cosine similarity, with shared terms. *(v0.7.0)* |
+| `get_session_clusters` | `k?: int = 8` | k-means topic clusters of all sessions, auto-labelled, with counts and avg cost/health. *(v0.7.0)* |
+| `get_live_session_events` | `session_id: str`, `since_line?: int = 0` | New events appended to an active session's `.jsonl` since `since_line`. *(v0.7.0)* |
+| `get_context_analysis` | `session_id: str` | Per-turn context-window utilization, efficiency ratings, and a waste indicator. *(v0.7.0)* |
+| `get_model_analytics` | _(none)_ | Cost/tokens/health/tool-success by model, plus a model recommendation. *(v0.7.0)* |
+| `export_annotations` | _(none)_ | All annotations as a portable JSON payload. *(v0.7.0)* |
+| `import_annotations` | `data: object`, `strategy?: "merge"\|"replace"` | Import an annotation payload into the local index. *(v0.7.0)* |
 
 ### v0.6.1 tool examples
 

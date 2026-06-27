@@ -300,6 +300,67 @@ def _t_get_search_history(conn, args: dict) -> dict:
     return search_history.history_payload(conn, {"limit": args.get("limit", 20)})
 
 
+# ---------------------------------------------------------------------------
+# v0.7.0 Intelligence Layer tools (31-38)
+# ---------------------------------------------------------------------------
+
+def _db_path_of(conn) -> str:
+    for row in conn.execute("PRAGMA database_list"):
+        if row[1] == "main":
+            return row[2]
+    return index.default_db_path()
+
+
+def _t_get_ai_session_summary(conn, args: dict) -> dict:
+    from . import ai_analysis
+    sid = str(args.get("session_id") or "")
+    return ai_analysis.summarize_session(conn, sid)
+
+
+def _t_find_similar_sessions(conn, args: dict) -> dict:
+    from . import semantic
+    sid = str(args.get("session_id") or "")
+    return semantic.similar_payload(conn, sid, {"top": args.get("top", 10)})
+
+
+def _t_get_session_clusters(conn, args: dict) -> dict:
+    from . import clustering
+    return clustering.clusters_payload(conn, {"k": args.get("k", 8)})
+
+
+def _t_get_live_session_events(conn, args: dict) -> dict:
+    from . import live_session
+    sid = str(args.get("session_id") or "")
+    return live_session.live_events_payload(conn, sid, {"since": args.get("since_line", 0)})
+
+
+def _t_get_context_analysis(conn, args: dict) -> dict:
+    from . import context_analyzer
+    sid = str(args.get("session_id") or "")
+    return context_analyzer.context_payload(conn, sid)
+
+
+def _t_get_model_analytics(conn, args: dict) -> dict:
+    from . import model_analytics
+    return model_analytics.models_payload(conn)
+
+
+def _t_export_annotations(conn, args: dict) -> dict:
+    from . import collab_annotations
+    return collab_annotations.export_payload(conn)
+
+
+def _t_import_annotations(conn, args: dict) -> dict:
+    # import writes, so use a writable connection (the dispatcher passes read-only)
+    from . import collab_annotations
+    rw = index.connect(_db_path_of(conn))
+    try:
+        return collab_annotations.import_payload(
+            rw, {"data": args.get("data"), "strategy": args.get("strategy", "merge")})
+    finally:
+        rw.close()
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -614,6 +675,87 @@ TOOLS = [
             "properties": {"limit": {"type": "integer", "description": "max entries (default 20)"}},
         },
         "handler": _t_get_search_history,
+    },
+    # --- v0.7.0 Intelligence Layer (31-38) ---
+    {
+        "name": "get_ai_session_summary",
+        "description": "AI-generated summary of a session (goal, approach, quality, what worked, 3 improvement suggestions). Opt-in: requires ANTHROPIC_API_KEY; returns a 402-style error otherwise. Cached after the first call.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_get_ai_session_summary,
+    },
+    {
+        "name": "find_similar_sessions",
+        "description": "Find the sessions most semantically similar to a given one, by local TF-IDF cosine similarity (no embeddings API). Returns session ids, titles, scores and the shared terms.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "top": {"type": "integer", "description": "max results (default 10)"},
+            },
+            "required": ["session_id"],
+        },
+        "handler": _t_find_similar_sessions,
+    },
+    {
+        "name": "get_session_clusters",
+        "description": "Auto-group all sessions into topic clusters with local k-means over TF-IDF vectors. Returns labelled clusters with counts, average cost/health and top sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"k": {"type": "integer", "description": "number of clusters (default 8)"}},
+        },
+        "handler": _t_get_session_clusters,
+    },
+    {
+        "name": "get_live_session_events",
+        "description": "Return new events appended to an active session's .jsonl since `since_line`. Poll this to monitor a sibling Claude Code session in real time.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "since_line": {"type": "integer", "description": "last line already seen (default 0)"},
+            },
+            "required": ["session_id"],
+        },
+        "handler": _t_get_live_session_events,
+    },
+    {
+        "name": "get_context_analysis",
+        "description": "Per-turn context-window utilization for a session: tokens in/out, percent of the model's window used, an efficiency rating per turn, and a waste indicator.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+        "handler": _t_get_context_analysis,
+    },
+    {
+        "name": "get_model_analytics",
+        "description": "Cost, tokens, health and tool-success rate broken down by Claude model, plus a history-grounded model recommendation for short vs. long tasks.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_get_model_analytics,
+    },
+    {
+        "name": "export_annotations",
+        "description": "Export all local annotations (session and message notes) as a portable JSON payload for sharing with a teammate. 100% local.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_export_annotations,
+    },
+    {
+        "name": "import_annotations",
+        "description": "Import an annotation JSON payload into the local index. strategy 'merge' (default) adds only annotations for sessions you have; 'replace' upserts, newest wins.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "data": {"type": "object", "description": "an exported annotations payload"},
+                "strategy": {"type": "string", "enum": ["merge", "replace"]},
+            },
+            "required": ["data"],
+        },
+        "handler": _t_import_annotations,
     },
 ]
 

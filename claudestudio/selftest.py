@@ -561,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 30, "mcp exposes 30 tools")
+        c.eq(len(tl["result"]["tools"]), 38, "mcp exposes 38 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -625,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.6.3", "package version bumped to 0.6.3")
-        c.eq(init["result"]["serverInfo"]["version"], "0.6.3", "mcp serverInfo is 0.6.3")
+        c.eq(claudestudio.__version__, "0.7.0", "package version bumped to 0.7.0")
+        c.eq(init["result"]["serverInfo"]["version"], "0.7.0", "mcp serverInfo is 0.7.0")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.6.3" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "30" in out, "cli info reports the 30 MCP tools")
+        c.ok("0.7.0" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "38" in out, "cli info reports the 38 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -1017,7 +1017,7 @@ def run() -> int:
         from . import patterns as patmod2
         from . import sync as syncmod
 
-        c.eq(index.SCHEMA_VERSION, 7, "schema version is 7 (search history)")
+        c.eq(index.SCHEMA_VERSION, 8, "schema version is 8 (intelligence layer)")
 
         # craft a session (real .jsonl → reindex) carrying GitHub refs + a
         # cross-session reference phrase + a scoreable prompt.
@@ -1852,10 +1852,10 @@ def run() -> int:
         from . import templates as tplmod
         from . import tool_chains as tchains
 
-        # --- schema v7: search_history table present ---
-        c.eq(index.SCHEMA_VERSION, 7, "v7: schema version is 7")
+        # --- schema v8: intelligence-layer tables present ---
+        c.eq(index.SCHEMA_VERSION, 8, "v8: schema version is 8")
         sv = index.stored_schema_version(conn62)
-        c.eq(sv, 7, "v7: stored schema version is 7")
+        c.eq(sv, 8, "v8: stored schema version is 8")
         v7cols = {r[1] for r in conn62.execute("PRAGMA table_info(search_history)")}
         c.ok({"query", "kind", "project", "result_count", "searched_at"} <= v7cols,
              "v7: search_history has the expected columns")
@@ -2124,11 +2124,18 @@ def run() -> int:
         c.ok(preg.list_plugins({"version": 1, "plugins": []})["version"] == 1,
              "registry: list echoes the registry version")
 
-        # --- MCP tools #27-30 ---
-        c.eq(len(mcpmod.TOOLS), 30, "mcp: exactly 30 tools")
+        # --- MCP tools #27-38 ---
+        c.eq(len(mcpmod.TOOLS), 38, "mcp: exactly 38 tools")
         _new63 = {"get_onboarding_status", "list_registry_plugins",
                   "get_plugin_info", "get_search_history"}
         c.ok(_new63 <= {t["name"] for t in mcpmod.TOOLS}, "mcp: the 4 new v0.6.3 tools registered")
+        _new70 = {"get_ai_session_summary", "find_similar_sessions",
+                  "get_session_clusters", "get_live_session_events",
+                  "get_context_analysis", "get_model_analytics",
+                  "export_annotations", "import_annotations"}
+        c.ok(_new70 <= {t["name"] for t in mcpmod.TOOLS},
+             "mcp: the 8 new v0.7.0 tools registered")
+        c.eq(len({t["name"] for t in mcpmod.TOOLS}), 38, "mcp: all 38 tool names unique")
         _o, _eo = _mcp62("get_onboarding_status", {})
         c.ok(not _eo and "sessions_indexed" in _o, "mcp: get_onboarding_status returns the signals")
         _sh, _esh = _mcp62("get_search_history", {"limit": 5})
@@ -2244,6 +2251,33 @@ def run() -> int:
     # mobile bottom nav rendering
     c.ok("function renderBottomNav(" in app_js and "BOTTOM_NAV" in app_js,
          "app.js: bottom nav rendered")
+
+    # --- v0.7.0 web wiring (Intelligence Layer) ---------------------------
+    c.ok("function aiInsightsButton(" in app_js and "/api/ai/status" in app_js,
+         "app.js: opt-in AI insights button wired to /api/ai/status")
+    c.ok("function openAiPanel(" in app_js and "aiSummary:" in app_js,
+         "app.js: AI summary panel wired")
+    c.ok("function openSimilarPanel(" in app_js and "semanticSimilar:" in app_js,
+         "app.js: semantic similar panel wired")
+    c.ok("k === 'S'" in app_js, "app.js: S opens the similar panel in detail view")
+    c.ok("function contextMicroChart(" in app_js and "contextAnalysis:" in app_js,
+         "app.js: context-window micro-chart wired")
+    c.ok("function clustersView(" in app_js and "clusters:" in app_js,
+         "app.js: clusters view wired to /api/clusters")
+    c.ok("route === 'clusters'" in app_js, "app.js: clusters route registered")
+    c.ok("function modelStatsCard(" in app_js and "modelAnalytics:" in app_js,
+         "app.js: per-model stats card wired")
+    c.ok("function liveBadge(" in app_js, "app.js: live badge renderer exists")
+    c.ok("ipynbUrl:" in app_js and "expNb" in app_js,
+         "app.js: notebook (.ipynb) export button wired")
+    c.ok(".ai-panel" in css and ".similar-panel" in css,
+         "css: AI + similar panels styled")
+    c.ok(".cluster-card" in css and ".context-chart" in css,
+         "css: cluster cards + context chart styled")
+    c.ok(".live-badge" in css and "live-pulse" in css,
+         "css: live badge pulse animation styled")
+    c.ok(".model-stats-card" in css and ".ms-row" in css,
+         "css: per-model stats card styled")
 
     # --- v0.5.1 web wiring -------------------------------------------------
     with open(os.path.join(web_dir, "index.html"), encoding="utf-8") as fh:
@@ -2422,6 +2456,30 @@ def run() -> int:
     audit = _BtnAudit()
     audit.feed(index_html)
     c.ok(audit.named, "a11y: every button in index.html has an accessible name")
+
+    # --- v0.7.0 Intelligence Layer modules -------------------------------
+    # Each new module ships a self-contained selftest(c) that builds its own
+    # deterministic fixtures and asserts against the shared Check object.
+    from . import (
+        ai_analysis,
+        clustering,
+        collab_annotations,
+        completions,
+        context_analyzer,
+        live_session,
+        model_analytics,
+        notebook_export,
+        semantic,
+    )
+    semantic.selftest(c)
+    clustering.selftest(c)
+    ai_analysis.selftest(c)
+    live_session.selftest(c)
+    completions.selftest(c)
+    context_analyzer.selftest(c)
+    model_analytics.selftest(c)
+    collab_annotations.selftest(c)
+    notebook_export.selftest(c)
 
     total = c.passed + c.failed
     print(f"\n  selftest: {c.passed}/{total} checks passed")

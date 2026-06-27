@@ -16,9 +16,11 @@ Explore, search, replay, and understand every Claude Code session — all on you
 [![Changelog](https://img.shields.io/badge/changelog-read-9a8cff)](CHANGELOG.md)
 [![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-9a8cff)](https://claude.ai/code)
 ![Plugins](https://img.shields.io/badge/plugins-registry-9a8cff)
-![Self-test](https://img.shields.io/badge/self--test-858%2B%20checks-5ec98a)
-![MCP Tools](https://img.shields.io/badge/MCP%20tools-30-9a8cff)
-![Schema](https://img.shields.io/badge/schema-v7-9a8cff)
+![Version](https://img.shields.io/badge/version-0.7.0-9a8cff)
+![Self-test](https://img.shields.io/badge/self--test-1000%2B%20checks-5ec98a)
+![MCP Tools](https://img.shields.io/badge/MCP%20tools-38-9a8cff)
+![Schema](https://img.shields.io/badge/schema-v8-9a8cff)
+![AI insights](https://img.shields.io/badge/AI%20insights-opt--in-ff8a5b)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
@@ -29,7 +31,7 @@ Explore, search, replay, and understand every Claude Code session — all on you
 [![Last Commit](https://img.shields.io/github/last-commit/ingridtoulotte/claudestudio)](https://github.com/ingridtoulotte/claudestudio/commits/main)
 [![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
-[Highlights](#-highlights) · [Quickstart](#-quickstart) · [Auto-index (hooks)](#-auto-index-with-claude-code-hooks) · [Live updates](#-live-updates) · [Features](#-features) · [Why ClaudeStudio](#-why-claudestudio) · [CLI](#-cli) · [Community](#-community) · [FAQ](#-faq)
+[Highlights](#-highlights) · [Quickstart](#-quickstart) · [What's new in v0.7.0](#-whats-new-in-v070) · [Compare](#-how-claudestudio-compares) · [Architecture](#️-architecture) · [Power recipes](#-power-user-recipes) · [Features](#-features) · [CLI](#-cli) · [Community](#-community) · [FAQ](#-faq)
 
 <br/>
 
@@ -41,7 +43,17 @@ Explore, search, replay, and understand every Claude Code session — all on you
 
 <sub><i>Replay any session like a movie — prompt → thinking → tool calls → result, on a scrubable timeline.</i></sub>
 
+<!-- TODO docs/demos/v070_quickstart.gif — 60-second demo: install → serve → AI insights → semantic search → live session → cluster view -->
+<sub><i>60-second demo (coming soon): install → serve → AI insights → semantic search → live session → cluster view.</i></sub>
+
 </div>
+
+**What is ClaudeStudio?** It's the local-first desktop workspace for everyone who
+runs Claude Code. Point it at your machine and it indexes, searches, replays,
+analyzes, *clusters* and (optionally) AI-summarizes every session you've ever run —
+on Windows, macOS and Linux, with **zero dependencies** and **zero data leaving your
+machine**. New in v0.7.0: an opt-in AI insights layer and fully local semantic
+search. Built for the whole Claude Code community, not just its maintainer.
 
 ---
 
@@ -52,6 +64,15 @@ Explore, search, replay, and understand every Claude Code session — all on you
 
 ## ✨ Highlights
 
+- ✨ **Opt-in AI insights** — `claudestudio ai-summary`, `ai-coach`, `ai-prompt`. The *only* feature that can touch the network, and only when you set `ANTHROPIC_API_KEY`. Zero model calls by default. *(new in v0.7.0)*
+- 🧭 **Local semantic search** — find sessions by *meaning* with zero-dependency TF-IDF + cosine (`claudestudio similar`). No embeddings API. *(new in v0.7.0)*
+- 🗺 **Session clustering** — auto-group your history into labelled topic clusters with stdlib k-means (`claudestudio clusters`). *(new in v0.7.0)*
+- 📐 **Context-window analyzer** — per-turn window utilization with a waste indicator, so you know when you're fragmenting work. *(new in v0.7.0)*
+- 🧪 **Per-model analytics** — cost / health / tool-success by model, plus a "use this model for this task" recommender. *(new in v0.7.0)*
+- 📓 **Jupyter export** — turn any session into a runnable `.ipynb` to share a reproducible workflow. *(new in v0.7.0)*
+- 🤝 **Collaborative annotations** — export/import your notes as portable JSON; share gold-standard sessions with the team, 100% local. *(new in v0.7.0)*
+- 🐚 **Shell completions** — first-class bash/zsh/fish tab completion (`claudestudio completions install`). *(new in v0.7.0)*
+- 🔴 **Live session viewer** — watch a session stream in as Claude Code writes it (`claudestudio watch-session`). *(new in v0.7.0)*
 - 🔒 **100% local, zero dependencies** — pure Python standard library. No `pip install`, no `node_modules`, no telemetry, no phone-home.
 - 🗂 **Browse every session** — fast, sortable, filterable list of every Claude Code conversation; star the keepers, archive the noise.
 - 🔎 **Search everything, instantly** — SQLite **FTS5 / BM25** full-text across every prompt, response, thinking block, and tool call, behind a <kbd>⌘K</kbd> / <kbd>Ctrl K</kbd> palette.
@@ -87,6 +108,176 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - 🔔 **Local webhooks** — POST alerts to a loopback/LAN URL on new sessions, budget alerts, or low health — RFC-1918 enforced so data never leaves your network. *(new in v0.6.2)*
 - ✅ **CLAUDE.md verification** — `claudestudio verify-claude-md` scores each claim in your `CLAUDE.md` against what Claude Code actually did (✅ verified / ⚠️ stale / ❓ unverifiable). *(new in v0.6.2)*
 - 📈 **Budget forecasting** — project end-of-month spend at the current pace, the biggest cost driver, and the most wasteful (expensive + low-health) pattern. *(new in v0.6.2)*
+
+---
+
+## 🆕 What's new in v0.7.0
+
+The **Intelligence Layer** release — the most significant yet. Nine substantial
+features for the developer who has hundreds of sessions and can't find the one
+with the perfect auth refactor. Schema migrates in place to **v8**; self-test
+**858 → 1145**; MCP **30 → 38 tools**. Still pure Python standard library, still
+100% local — the *one* feature that can reach the network (AI analysis) is strictly
+opt-in and gated on your own `ANTHROPIC_API_KEY`.
+
+<!-- TODO docs/demos/v070_quickstart.gif — 60-second demo: install → serve → AI insights → semantic search → live session → cluster view -->
+
+- **✨ Opt-in AI analysis** — natural-language session summaries, a personal coaching
+  report, and prompt rewriting. Zero model calls by default.
+
+  ```console
+  $ claudestudio ai-summary --last
+    Refactored the auth middleware to async; led with the file path, iterated on tests…
+    Improvement suggestions:
+      1. Lead debugging sessions with the failing test output.
+      2. …
+    (claude-haiku-4-5-20251001 · 1,240 tokens · $0.0009)
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_ai_insights.png -->
+
+- **🧭 Local semantic search** — TF-IDF vectors + cosine similarity, zero deps.
+
+  ```console
+  $ claudestudio similar <session_id> --top 5
+    0.930  Debug N+1 query in orders endpoint   shares: join, eager, p95
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_similar_sessions.png -->
+
+- **🗺 Session clustering** — deterministic k-means over the vectors, auto-labelled.
+
+  ```console
+  $ claudestudio clusters --k 8
+    ▸ debugging·auth·jwt   (22 sessions · $1.00 avg · health 77)
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_clusters.png -->
+
+- **🔴 Live session viewer** — watch a session stream in as it's written.
+
+  ```console
+  $ claudestudio watch-session --last
+    [14:32:17] 🛠 tool_use: Read auth.py
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_live_session.png -->
+
+- **🐚 Shell completions** — one command, permanent tab completion.
+
+  ```console
+  $ claudestudio completions install
+    ✓ installed bash completions to ~/.bash_completion.d/claudestudio
+  ```
+
+- **📐 Context-window efficiency analyzer** — per-turn utilization + waste flag.
+
+  ```console
+  $ claudestudio context-analysis --last
+    t  0 |###---------------------------|   9.6%
+    avg 6.6%  peak 15.6%  ⚠ fragmented
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_context_analyzer.png -->
+
+- **🧪 Per-model analytics & recommender** — cost/health/tool-success by model.
+
+  ```console
+  $ claudestudio model-stats
+    claude-opus-4-8     10   $10.48   health 77   97.9% tools ok
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_model_stats.png -->
+
+- **🤝 Collaborative annotations** — share your notes as portable JSON.
+
+  ```console
+  $ claudestudio annotations export --out annotations.json
+  $ claudestudio annotations import annotations.json --merge
+  ```
+
+- **📓 Jupyter notebook export** — a runnable `.ipynb` from any session.
+
+  ```console
+  $ claudestudio export --format ipynb --last --out session.ipynb
+  ```
+  <!-- TODO screenshot: docs/screenshots/v070_notebook_export.png -->
+
+Each feature is exposed three ways — **CLI**, **HTTP API**, and an **MCP tool** — so
+Claude Code can consume its own history. See the per-feature docs:
+[AI Analysis](docs/AI_ANALYSIS.md) · [Semantic Search](docs/SEMANTIC_SEARCH.md) ·
+[Clustering](docs/CLUSTERING.md) · [Completions](docs/COMPLETIONS.md) ·
+[Context Analysis](docs/CONTEXT_ANALYSIS.md) · [Model Analytics](docs/MODEL_ANALYTICS.md) ·
+[Collaborative Annotations](docs/COLLAB_ANNOTATIONS.md) · [Notebook Export](docs/NOTEBOOK_EXPORT.md).
+
+---
+
+## 🥊 How ClaudeStudio compares
+
+| | **ClaudeStudio** | Commercial session viewers | DIY viewer scripts |
+|---|:---:|:---:|:---:|
+| 100% local (no cloud) | ✅ | ⚠️ usually cloud | ✅ |
+| Zero dependencies | ✅ | ❌ | ⚠️ varies |
+| Full-text search (FTS5/BM25) | ✅ | ✅ | ❌ |
+| Session replay | ✅ | ✅ | ❌ |
+| MCP integration | ✅ 38 tools | ❌ | ❌ |
+| Plugin system | ✅ + registry | ⚠️ | ❌ |
+| AI insights (opt-in) | ✅ | ✅ (always-on) | ❌ |
+| Semantic search | ✅ (local TF-IDF) | ✅ (cloud embeddings) | ❌ |
+| Session clustering | ✅ | ⚠️ | ❌ |
+| Shell completions | ✅ | ⚠️ | ❌ |
+| Jupyter export | ✅ | ❌ | ❌ |
+| Open source (MIT) | ✅ | ❌ | ✅ |
+
+---
+
+## 🏗️ Architecture
+
+```
+~/.claude/projects/     ←  read-only
+       ↓
+   claudestudio index
+  (SQLite + FTS5 + TF-IDF vectors + clusters + AI cache)
+       ↓ ↕ ↕ ↕
+  HTTP API (127.0.0.1)  ←→  Browser UI  ←→  MCP Server  ←→  Claude Code
+       ↕
+  CLI (50+ commands)  →  stdout / clipboard / .ipynb / .html / .md
+```
+
+ClaudeStudio reads your Claude Code session `.jsonl` files **read-only** and builds
+a local SQLite index (full-text via FTS5, plus derived TF-IDF vectors, cluster
+assignments and an AI summary cache). Every surface — the browser UI, the HTTP API,
+the MCP server, and the CLI — reads from that one index, so behaviour can never
+drift between them, and the self-test exercises all of them.
+
+Nothing leaves your machine. The server binds to `127.0.0.1` only; every analytic is
+computed deterministically and locally. The **single** exception is the opt-in AI
+analysis layer, which calls `https://api.anthropic.com` via `urllib` and *only* when
+you set `ANTHROPIC_API_KEY` — with no key, there is no network code path at all.
+
+---
+
+## ⚡ Power user recipes
+
+```bash
+# Morning standup: what did Claude do yesterday?
+claudestudio digest --yesterday | pbcopy
+
+# Before a PR: get an AI summary of your last session
+claudestudio ai-summary --last | gh pr comment --body-file -
+
+# Find sessions about authentication across your history
+claudestudio similar $(claudestudio list --json | jq -r 'first(.[].id)')
+
+# Export today's best session as a Jupyter notebook to share with the team
+claudestudio export --format ipynb --last --out session_$(date +%Y%m%d).ipynb
+
+# Cluster all your sessions and identify your top topic areas
+claudestudio clusters --k 8
+
+# Get a coaching report on your last month of Claude Code usage
+claudestudio ai-coach
+
+# Install tab completion in one command
+claudestudio completions install
+
+# Live-watch a session as Claude Code writes it
+claudestudio watch-session --last
+```
 
 ---
 
@@ -454,7 +645,7 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 | Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ❌                 | ✅               |
 | Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ❌                 | ✅ deterministic |
 | Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ 30 tools      |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ 38 tools      |
 | Plugin system + registry      | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
 | Mobile-ready UI               | ❌                | ❌             | ⚠️                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
 | GitHub Actions integration    | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
@@ -567,7 +758,17 @@ python -m claudestudio [command]
   template       session starter templates             list | use NAME --file … --goal … | create NAME
   search-history show or clear your recent searches     --limit N --clear --json
   github-summary Markdown session summary for CI        --session PATH | --last
-  --selftest     run the built-in correctness suite (858 checks, no deps)
+  ai-summary     opt-in AI session summary               <id> --last --copy --out
+  ai-coach       opt-in AI coaching report               -n 20
+  ai-prompt      rewrite a prompt for better results      "<prompt>"
+  similar        semantically similar sessions (TF-IDF)   <id> --top N
+  clusters       auto-group sessions by topic (k-means)   --k 8 --json
+  context-analysis  per-turn context-window utilization   <id> --last
+  model-stats    cost/health/tool-success by model        --json
+  annotations    export/import your annotation layer      export|import [--merge|--replace]
+  watch-session  stream a session's events as written     <id> --last
+  completions    print/install shell tab-completions      bash|zsh|fish|install
+  --selftest     run the built-in correctness suite (1145 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
@@ -647,13 +848,13 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] **Tool chain visualizer** (Sankey-style SVG) — _v0.6.3_
 - [x] **Session templates** (auto-context, copy-to-clipboard) — _v0.6.3_
 
-<details><summary>🗺️ Extended roadmap (planned)</summary>
+### v0.7.0 — "Intelligence Layer" ✅ shipped
+- [x] **Opt-in AI analysis** — natural-language summaries, coaching, prompt rewriting (`ANTHROPIC_API_KEY`-gated)
+- [x] **Local semantic search** — TF-IDF vectors + cosine (no embeddings API)
+- [x] **Session clustering** — stdlib k-means, auto-labelled
+- [x] **Live session viewer** · **Shell completions** · **Context-window analyzer** · **Per-model analytics** · **Collaborative annotations** · **Jupyter export**
 
-### v0.7.0 — "Intelligence Layer"
-- **Opt-in AI analysis** — with `ANTHROPIC_API_KEY` set, produce rich natural-language session summaries and code-quality assessments. Fully opt-in, never default, clearly labelled.
-- **Semantic session search** — locally-stored vector embeddings for "find sessions similar in meaning to this prompt" beyond keyword matching.
-- **Session clustering** — auto-group sessions by topic with TF-IDF + k-means (stdlib math, no sklearn).
-- **Live session viewer** — watch a running session update in real time (extends the v0.5.1 watch infrastructure).
+<details><summary>🗺️ Extended roadmap (planned)</summary>
 
 ### v0.7.1 — "Team Edition"
 - **Read-only shared server** — `claudestudio serve --shared --read-only` exposes the UI to the LAN with an IP allowlist, for standup dashboards.
@@ -714,7 +915,8 @@ If you use ClaudeStudio in your work, you can cite it via [`CITATION.cff`](CITAT
   author  = {Toulotte, Ingrid},
   title   = {ClaudeStudio},
   url     = {https://github.com/ingridtoulotte/claudestudio},
-  version = {0.6.2}
+  version = {0.7.0},
+  year    = {2026}
 }
 ```
 
@@ -795,6 +997,16 @@ No dependencies to install, no build step to learn. New here? See
 [**Contributing in 5 minutes**](CONTRIBUTING.md#-contributing-in-5-minutes) for
 specific starter tasks, and [docs/CLAUDE_CODE_INTEGRATION.md](docs/CLAUDE_CODE_INTEGRATION.md)
 for the full Claude Code integration story.
+
+## 🙌 Contributors
+
+<!-- TODO: add an All Contributors table when we reach 5 contributors -->
+
+ClaudeStudio is built for — and increasingly *by* — the Claude Code community.
+Every feature in v0.7.0 was shaped by a real workflow problem developers hit at
+scale. Want your name here? Good first issues, the plugin registry, and the
+screenshot/GIF placeholders throughout this README are all great entry points —
+start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🌟 Community showcase
 

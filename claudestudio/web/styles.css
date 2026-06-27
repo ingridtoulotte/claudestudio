@@ -942,3 +942,74 @@ mark.hit { background: var(--accent-soft); color: var(--accent); border-radius: 
   .grid-2, .grid-2.wide { grid-template-columns: 1fr; }
   .cs-modal, .cs-template-panel, .tour-card { width: 94vw; }
 }
+
+/* ==========================================================================
+   v0.7.0 — Intelligence Layer
+   ========================================================================== */
+
+/* opt-in AI insights */
+.ai-insights-btn.disabled { opacity: .5; cursor: not-allowed; }
+.ai-panel {
+  margin: 12px 0; padding: 14px 16px; border-radius: 12px;
+  background: linear-gradient(135deg, rgba(154,140,255,.10), rgba(94,201,138,.06));
+  border: 1px solid var(--line-2);
+}
+.ai-panel.err { color: var(--muted); }
+.ai-panel-head { font-weight: 600; margin-bottom: 8px; }
+.ai-summary { line-height: 1.5; white-space: pre-wrap; }
+.ai-sub { margin-top: 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ai-list { margin: 6px 0 0; padding-left: 18px; }
+.ai-list li { margin: 3px 0; }
+.ai-meta { margin-top: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* semantic similar panel */
+.similar-panel { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
+.similar-head { font-weight: 600; margin-bottom: 8px; }
+.similar-list { display: flex; flex-direction: column; gap: 4px; }
+.similar-row {
+  display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: center;
+  padding: 6px 8px; border-radius: 8px; text-decoration: none; color: inherit;
+}
+.similar-row:hover { background: var(--line); }
+.similar-score { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.similar-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.similar-reason { font-size: 11px; color: var(--muted); }
+
+/* context-window micro-chart */
+.context-chart { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.ctx-label, .ctx-stat { font-size: 11px; color: var(--muted); }
+.ctx-svg .ctx-bar { fill: var(--accent); }
+.ctx-svg .ctx-bar.low { fill: #6f7585; }
+.ctx-svg .ctx-bar.moderate { fill: #9a8cff; }
+.ctx-svg .ctx-bar.high { fill: #5ec98a; }
+
+/* clusters view */
+.cluster-card {
+  margin: 10px 0; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--line); border-left: 3px solid hsl(calc(var(--cluster, 0) * 53), 60%, 62%);
+}
+.cluster-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cluster-dot { width: 10px; height: 10px; border-radius: 50%; background: hsl(calc(var(--cluster, 0) * 53), 60%, 62%); }
+.cluster-label { font-weight: 600; font-family: var(--mono); font-size: 13px; }
+.cluster-count { font-size: 11px; color: var(--muted); margin-left: auto; }
+.cluster-sessions { display: flex; flex-direction: column; gap: 3px; }
+.cluster-session { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-radius: 6px; text-decoration: none; color: inherit; }
+.cluster-session:hover { background: var(--line); }
+.cluster-session .cs-health { font-size: 11px; color: var(--muted); }
+
+/* per-model stats card */
+.model-stats-card { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
+.model-stats-card .card-title { font-weight: 600; margin-bottom: 8px; }
+.ms-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 12px; padding: 4px 0; font-size: 13px; align-items: center; }
+.ms-model { font-family: var(--mono); }
+.ms-cost { color: var(--accent); }
+.ms-health, .ms-tools { font-size: 11px; color: var(--muted); }
+.ms-rec { margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+/* live badge — pulsing red dot for a session being written right now */
+.live-badge {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 10px;
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #fff; background: #e5484d;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }

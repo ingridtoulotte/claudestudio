@@ -334,6 +334,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/templates/") and path.endswith("/render"):
                     name = unquote(path[len("/api/templates/"):-len("/render")])
                     return self._send_json(api.template_render(conn, name, body))
+                # --- v0.7.0 write endpoints ---
+                # Route: POST /api/annotations/import
+                if path == "/api/annotations/import":
+                    from . import collab_annotations
+                    return self._send_json(collab_annotations.import_payload(conn, body))
             finally:
                 conn.close()
         except api.ApiError as exc:
@@ -522,6 +527,59 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/session/") and path.endswith("/annotations"):
                     sid = path[len("/api/session/"):-len("/annotations")]
                     return self._send_json(api.get_annotations(conn, sid))
+                # --- v0.7.0 read endpoints (Intelligence Layer) ---
+                # Route: GET /api/ai/status
+                if path == "/api/ai/status":
+                    from . import ai_analysis
+                    return self._send_json(ai_analysis.ai_status(conn))
+                # Route: GET /api/session/{id}/ai-summary
+                if path.startswith("/api/session/") and path.endswith("/ai-summary"):
+                    sid = path[len("/api/session/"):-len("/ai-summary")]
+                    from . import ai_analysis
+                    data = ai_analysis.ai_summary_payload(conn, sid)
+                    code = 402 if data.get("status") == 402 else 200
+                    return self._send_json(data, status=code)
+                # Route: GET /api/clusters
+                if path == "/api/clusters":
+                    from . import clustering
+                    return self._send_json(clustering.clusters_payload(conn, params))
+                # Route: GET /api/analytics/models
+                if path == "/api/analytics/models":
+                    from . import model_analytics
+                    return self._send_json(model_analytics.models_payload(conn))
+                # Route: GET /api/efficiency/context
+                if path == "/api/efficiency/context":
+                    from . import context_analyzer
+                    return self._send_json(context_analyzer.efficiency_overview(conn))
+                # Route: GET /api/annotations/export
+                if path == "/api/annotations/export":
+                    from . import collab_annotations
+                    return self._send_json(collab_annotations.export_payload(conn))
+                # Route: GET /api/session/{id}/context-analysis
+                if path.startswith("/api/session/") and path.endswith("/context-analysis"):
+                    sid = path[len("/api/session/"):-len("/context-analysis")]
+                    from . import context_analyzer
+                    return self._send_json(context_analyzer.context_payload(conn, sid))
+                # Route: GET /api/session/{id}/semantic — persistent TF-IDF similarity
+                if path.startswith("/api/session/") and path.endswith("/semantic"):
+                    sid = path[len("/api/session/"):-len("/semantic")]
+                    from . import semantic
+                    return self._send_json(semantic.similar_payload(conn, sid, params))
+                # Route: GET /api/session/{id}/live — poll new appended events
+                if path.startswith("/api/session/") and path.endswith("/live"):
+                    sid = path[len("/api/session/"):-len("/live")]
+                    from . import live_session
+                    return self._send_json(live_session.live_events_payload(conn, sid, params))
+                # Route: GET /api/session/{id}/export.ipynb — Jupyter notebook
+                # (handled before the generic /export route below)
+                if path.startswith("/api/session/") and path.endswith("/export.ipynb"):
+                    sid = path[len("/api/session/"):-len("/export.ipynb")]
+                    from . import notebook_export
+                    nb = notebook_export.notebook_json(conn, sid)
+                    if nb is None:
+                        return self._send_json({"error": "not found"}, status=404)
+                    return self._send_download(nb, "application/json; charset=utf-8",
+                                               f"{sid[:12]}.ipynb")
                 if path.startswith("/api/session/") and path.endswith("/diffs"):
                     sid = path[len("/api/session/"):-len("/diffs")]
                     return self._send_json(api.diffs_for_session(conn, sid, params.get("file")))

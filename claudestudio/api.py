@@ -433,6 +433,14 @@ def export_session(conn, session_id: str, fmt: str) -> dict | None:
     detail = get_session(conn, session_id)
     if detail is None:
         return None
+    if fmt == "ipynb":
+        from . import notebook_export
+        nb = notebook_export.notebook_json(conn, session_id)
+        if nb is None:
+            return None
+        filename = f"{_slug(detail.get('title'), session_id[:8] or 'session')}.ipynb"
+        return {"text": nb, "content_type": "application/json; charset=utf-8",
+                "filename": filename}
     text, content_type = export.render(detail, fmt)
     if content_type.startswith("text/html"):
         ext = "html"

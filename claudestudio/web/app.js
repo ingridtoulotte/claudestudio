@@ -97,6 +97,15 @@ const API = {
   state: (id, patch) => API.post('/api/state/' + encodeURIComponent(id), patch),
   reindex: () => API.post('/api/reindex', {}),
   exportUrl: (id, fmt) => '/api/session/' + encodeURIComponent(id) + '/export.' + fmt,
+  // v0.7.0 Intelligence Layer
+  aiStatus: () => API.get('/api/ai/status'),
+  aiSummary: (id) => API.get('/api/session/' + encodeURIComponent(id) + '/ai-summary'),
+  semanticSimilar: (id, top = 10) => API.get('/api/session/' + encodeURIComponent(id) + '/semantic?top=' + top),
+  clusters: (k = 8) => API.get('/api/clusters?k=' + k),
+  modelAnalytics: () => API.get('/api/analytics/models'),
+  contextAnalysis: (id) => API.get('/api/session/' + encodeURIComponent(id) + '/context-analysis'),
+  liveEvents: (id, since = 0) => API.get('/api/session/' + encodeURIComponent(id) + '/live?since=' + since),
+  ipynbUrl: (id) => '/api/session/' + encodeURIComponent(id) + '/export.ipynb',
   saved: () => API.get('/api/saved'),
   addSaved: (b) => API.post('/api/saved', b),
   delSaved: (id) => fetch('/api/saved/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
@@ -215,6 +224,7 @@ const NAV = [
   { id: 'efficiency', label: 'Efficiency', icon: 'M13 2L3 14h7l-1 8 10-12h-7l1-8z' },
   { id: 'prompts', label: 'Prompts', icon: 'M4 5h16M4 12h16M4 19h10M18 17l3 2-3 2' },
   { id: 'patterns', label: 'Patterns', icon: 'M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z' },
+  { id: 'clusters', label: 'Clusters', icon: 'M7 7a3 3 0 1 0 0-.01M17 7a3 3 0 1 0 0-.01M12 17a3 3 0 1 0 0-.01M9 8l3 6M15 8l-3 6' },
   { id: 'projects', label: 'Projects', icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
   { id: 'compare', label: 'Compare', icon: 'M9 3v18M4 7h5M4 12h5M4 17h5M15 3v18M15 8h5M15 13h5' },
   { id: 'wrapped', label: 'Wrapped', icon: 'M12 2l2.4 5 5.6.5-4.2 3.7 1.3 5.5L12 19l-5.1 2.7 1.3-5.5L4 12.5 9.6 12z' },
@@ -294,6 +304,7 @@ async function router() {
     if (route === 'efficiency') return await viewEfficiency();
     if (route === 'prompts') return await viewPrompts();
     if (route === 'patterns') return await viewPatterns();
+    if (route === 'clusters') return await clustersView(params.k ? parseInt(params.k, 10) : 8);
     if (route === 'projects') return await viewProjects();
     if (route === 'timeline') return await viewTimeline();
     if (route === 'compare') return await viewCompare(params);
@@ -509,10 +520,14 @@ async function viewSession(id, params = {}) {
   const askBtn = el('button', { class: 'btn-ghost accent', title: 'Ask the grounded companion about this session', onclick: () => go('ask', { session: id }) }, ['✦ Ask about this']);
   const expMd = el('button', { class: 'btn-ghost', title: 'Export to Markdown', onclick: () => { downloadFrom(API.exportUrl(id, 'md')); toast('Exported Markdown'); } }, ['⬇ .md']);
   const expHtml = el('button', { class: 'btn-ghost', title: 'Export to a standalone, shareable HTML file', onclick: () => { downloadFrom(API.exportUrl(id, 'html')); toast('Exported HTML'); } }, ['⬇ .html']);
+  // v0.7.0: notebook export, semantic-similar panel, and opt-in AI insights
+  const expNb = el('button', { class: 'btn-ghost', title: 'Export as a Jupyter notebook (.ipynb)', onclick: () => { downloadFrom(API.ipynbUrl(id)); toast('Exported notebook'); } }, ['⬇ .ipynb']);
+  const simBtn = el('button', { class: 'btn-ghost', title: 'Find semantically similar sessions (S)', onclick: () => openSimilarPanel(id) }, ['≈ Similar']);
+  const aiBtn = aiInsightsButton(id);
 
   root.appendChild(el('div', { class: 'page-head' }, [
     el('a', { href: '#/sessions', class: 'btn-ghost', html: '← Sessions' }),
-    el('div', { class: 'page-actions' }, [askBtn, expMd, expHtml, star, arch]),
+    el('div', { class: 'page-actions' }, [aiBtn, simBtn, askBtn, expMd, expHtml, expNb, star, arch]),
   ]));
 
   const modelChips = (s.models || []).map((m) => { const f = family(m); return el('span', { class: `chip model-chip fam-${f}` }, [el('span', { class: 'dot' }), shortModel(m)]); });
@@ -536,6 +551,10 @@ async function viewSession(id, params = {}) {
 
   // v0.5.2: git context badge + health breakdown + session-level annotation
   root.appendChild(detailContext(s, id));
+
+  // v0.7.0: context-window micro-chart (inline SVG) + a slot for the Similar panel
+  root.appendChild(contextMicroChart(id));
+  root.appendChild(el('div', { id: 'similar-slot' }));
 
   // at-a-glance brief — files touched + tools, computed from the timeline
   const brief = briefFromTimeline(s.timeline);
@@ -618,6 +637,7 @@ async function viewSession(id, params = {}) {
     else if (k === '>' || k === '.') { e.preventDefault(); replay.speedUp(); }
     else if (k === 'e' || k === 'E') { e.preventDefault(); replay.jumpToError(); }
     else if (k === 'b' || k === 'B') { e.preventDefault(); if (cursor >= 0) openBookmarkPopover(cursor, null); }
+    else if (k === 'S') { e.preventDefault(); openSimilarPanel(id); }  // v0.7.0 similar panel
   });
 
   // when arriving from a search result, light up the matched terms in the body
@@ -959,6 +979,11 @@ async function viewAnalytics() {
     el('div', { class: 'k', text: k }), el('div', { class: 'v ' + (cls || ''), text: v }), el('div', { class: 'sub', text: sub }),
   ])));
   root.appendChild(stats);
+
+  // v0.7.0: per-model analytics + recommender (loaded async, appended in place)
+  const modelSlot = el('div', { class: 'model-stats-slot' });
+  root.appendChild(modelSlot);
+  API.modelAnalytics().then((md) => { if (md.models && md.models.length) modelSlot.appendChild(modelStatsCard(md)); }).catch(() => {});
 
   if (a.unpriced_models && a.unpriced_models.length) {
     root.appendChild(el('div', { class: 'panel', style: 'margin-bottom:14px;border-color:var(--line-2)' }, [
@@ -2437,3 +2462,148 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'N' || e.key === 'n') { e.preventDefault(); openTemplatePicker(); }
   else if (e.key === 'H' || e.key === 'h') { e.preventDefault(); openCmdk(); }
 });
+
+// ===========================================================================
+// v0.7.0 — Intelligence Layer UI
+// ===========================================================================
+
+// Opt-in AI insights button. Greyed-out with a tooltip until ANTHROPIC_API_KEY
+// is set; the status is fetched once and cached.
+let _aiStatus = null;
+function aiInsightsButton(id) {
+  const btn = el('button', { class: 'btn-ghost ai-insights-btn', title: 'Checking AI status…' }, ['✨ AI Insights']);
+  btn.disabled = true;
+  (async () => {
+    try {
+      if (_aiStatus === null) _aiStatus = await API.aiStatus();
+      if (_aiStatus.api_key_set) {
+        btn.disabled = false;
+        btn.title = 'Generate an AI summary of this session (uses your ANTHROPIC_API_KEY)';
+        btn.onclick = () => openAiPanel(id);
+      } else {
+        btn.classList.add('disabled');
+        btn.title = 'Set ANTHROPIC_API_KEY to unlock AI insights';
+      }
+    } catch (e) { btn.title = 'AI status unavailable'; }
+  })();
+  return btn;
+}
+
+async function openAiPanel(id) {
+  const slot = $('#similar-slot');
+  if (!slot) return;
+  slot.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const r = await API.aiSummary(id);
+    slot.innerHTML = '';
+    const card = el('div', { class: 'ai-panel' }, [
+      el('div', { class: 'ai-panel-head', text: '✨ AI Insights' }),
+      el('div', { class: 'ai-summary', text: r.summary || '' }),
+    ]);
+    if ((r.improvement_suggestions || []).length) {
+      card.appendChild(el('div', { class: 'ai-sub', text: 'Improvement suggestions' }));
+      card.appendChild(el('ul', { class: 'ai-list' },
+        r.improvement_suggestions.map((s) => el('li', { text: s }))));
+    }
+    card.appendChild(el('div', { class: 'ai-meta', text:
+      `${r.model_used} · ${r.tokens_used} tokens · ${fmt.cost(r.cost_usd)}${r.cached ? ' · cached' : ''}` }));
+    slot.appendChild(card);
+  } catch (e) {
+    slot.innerHTML = '';
+    slot.appendChild(el('div', { class: 'ai-panel err', text: '✨ ' + (e.message || 'AI unavailable — set ANTHROPIC_API_KEY') }));
+  }
+}
+
+// Semantic "Similar sessions" panel (S key / ≈ Similar button).
+async function openSimilarPanel(id) {
+  const slot = $('#similar-slot');
+  if (!slot) return;
+  slot.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const r = await API.semanticSimilar(id, 10);
+    slot.innerHTML = '';
+    const list = (r.similar || []).map((x) => el('a', {
+      class: 'similar-row', href: '#/session/' + encodeURIComponent(x.session_id),
+    }, [
+      el('span', { class: 'similar-score', text: x.score.toFixed(3) }),
+      el('span', { class: 'similar-title', text: x.title }),
+      el('span', { class: 'similar-reason', text: x.reason }),
+    ]));
+    slot.appendChild(el('div', { class: 'similar-panel' }, [
+      el('div', { class: 'similar-head', text: '≈ Similar sessions' }),
+      list.length ? el('div', { class: 'similar-list' }, list)
+        : el('div', { class: 'empty', text: 'No similar sessions found yet.' }),
+    ]));
+  } catch (e) {
+    slot.innerHTML = '';
+    slot.appendChild(el('div', { class: 'empty', text: 'Could not load similar sessions.' }));
+  }
+}
+
+// Inline SVG micro-chart of per-turn context-window utilization.
+function contextMicroChart(id) {
+  const host = el('div', { class: 'context-chart' });
+  (async () => {
+    try {
+      const r = await API.contextAnalysis(id);
+      const turns = r.turns || [];
+      if (!turns.length) { host.remove(); return; }
+      const w = 4, gap = 1, h = 28;
+      const bars = turns.map((t, i) => {
+        const bh = Math.max(1, Math.round((Math.min(t.context_pct, 100) / 100) * h));
+        return `<rect x="${i * (w + gap)}" y="${h - bh}" width="${w}" height="${bh}" rx="1" class="ctx-bar ${t.efficiency_rating}"></rect>`;
+      }).join('');
+      const width = turns.length * (w + gap);
+      host.innerHTML = `<span class="ctx-label">Context window</span>`
+        + `<svg width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" class="ctx-svg">${bars}</svg>`
+        + `<span class="ctx-stat">avg ${r.avg_utilization_pct}% · peak ${r.peak_utilization_pct}%`
+        + (r.waste_indicator ? ' · ⚠ fragmented' : '') + `</span>`;
+    } catch (e) { host.remove(); }
+  })();
+  return host;
+}
+
+// Clusters view — grouped, colour-coded by cluster index.
+async function clustersView(k) {
+  view().innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const r = await API.clusters(k || 8);
+  const root = el('div', { class: 'view-pad fade-in' });
+  root.appendChild(el('div', { class: 'page-head' }, [el('h2', { text: 'Clusters' })]));
+  (r.clusters || []).forEach((c) => {
+    const card = el('div', { class: 'cluster-card', style: `--cluster:${c.id}` }, [
+      el('div', { class: 'cluster-head' }, [
+        el('span', { class: 'cluster-dot' }),
+        el('span', { class: 'cluster-label', text: c.label }),
+        el('span', { class: 'cluster-count', text: `${c.count} sessions · ${fmt.cost(c.avg_cost)} avg · health ${c.avg_health}` }),
+      ]),
+      el('div', { class: 'cluster-sessions' }, (c.sessions || []).map((s) =>
+        el('a', { class: 'cluster-session', href: '#/session/' + encodeURIComponent(s.id) }, [
+          el('span', { text: s.title }), el('span', { class: 'cs-health', text: 'health ' + s.health }),
+        ]))),
+    ]);
+    root.appendChild(card);
+  });
+  if (!(r.clusters || []).length) root.appendChild(el('div', { class: 'empty', text: 'Index more sessions to see clusters.' }));
+  view().innerHTML = ''; view().appendChild(root);
+}
+
+// Per-model analytics card (cost/health/tool-success), for the analytics view.
+function modelStatsCard(data) {
+  const card = el('div', { class: 'model-stats-card' });
+  card.appendChild(el('div', { class: 'card-title', text: 'By model' }));
+  (data.models || []).forEach((m) => {
+    card.appendChild(el('div', { class: 'ms-row' }, [
+      el('span', { class: 'ms-model', text: m.model }),
+      el('span', { class: 'ms-cost', text: fmt.cost(m.total_cost_usd) }),
+      el('span', { class: 'ms-health', text: 'health ' + m.avg_health_score }),
+      el('span', { class: 'ms-tools', text: (m.tool_success_rate * 100).toFixed(1) + '% tools ok' }),
+    ]));
+  });
+  if (data.recommendation) card.appendChild(el('div', { class: 'ms-rec', text: data.recommendation }));
+  return card;
+}
+
+// A pulsing LIVE badge for a session row whose .jsonl is being written right now.
+function liveBadge() {
+  return el('span', { class: 'live-badge', title: 'This session is being written right now', text: 'LIVE' });
+}

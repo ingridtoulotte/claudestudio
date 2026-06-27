@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-27
+
+The **"Intelligence Layer"** release — the most significant yet. v0.7.0 adds nine
+substantial features that help the Claude Code developer who has hundreds of
+sessions: an opt-in AI analysis layer (the only feature that can ever touch the
+network, and only when *you* set `ANTHROPIC_API_KEY`), local zero-dependency
+semantic search and clustering over TF-IDF vectors, a live session viewer,
+shell completions, a context-window efficiency analyzer, per-model analytics with
+a recommender, collaborative annotation export/import, and Jupyter notebook
+export. Self-test grows **858 → 1145** checks; the MCP server **30 → 38** tools;
+the schema migrates in place to **v8**. Everything stays pure Python standard
+library, 100% local. `CODE_OF_CONDUCT.md` is untouched.
+
+### Added
+- **Opt-in AI analysis** (`ai_analysis.py`): `claudestudio ai-summary <id> [--last]`
+  summarizes a session (goal, approach, quality, what worked, 3 improvement
+  suggestions) via `claude-haiku-4-5-20251001`; `ai-coach` produces a personal
+  coaching report over your recent sessions; `ai-prompt <text>` rewrites a prompt
+  with a projected effectiveness delta. **Zero model calls by default** — every
+  path is gated on `ANTHROPIC_API_KEY` and returns a clear 402-style message
+  otherwise. Results, token usage and cost are recorded in the new `ai_usage`
+  table (cached, rate-limited to one real call per session per hour). New
+  `GET /api/ai/status`, `GET /api/session/{id}/ai-summary` (HTTP 402 with no key),
+  and MCP tool #31 `get_ai_session_summary`.
+- **Local semantic search** (`semantic.py`): zero-dependency TF-IDF vectors
+  (top-200 terms per session, stored in `session_vectors`) with cosine similarity.
+  `claudestudio similar <id> [--top N]`, `GET /api/session/{id}/semantic`, MCP tool
+  #32 `find_similar_sessions`. No embeddings API, no `sentence-transformers`.
+- **Session clustering** (`clustering.py`): deterministic k-means (seed 42) over
+  the TF-IDF vectors, auto-labelled from each centroid's top terms.
+  `claudestudio clusters [--k N]`, `GET /api/clusters`, MCP tool #33
+  `get_session_clusters`. Cached in `session_clusters`.
+- **Live session viewer** (`live_session.py`): tail a session's `.jsonl` as it's
+  written. `claudestudio watch-session <id>`, `GET /api/session/{id}/live`
+  (poll new events since a line), MCP tool #34 `get_live_session_events`.
+- **Shell completions** (`completions.py`): `claudestudio completions bash|zsh|fish`
+  and `completions install` (auto-detects your shell). Covers every sub-command
+  plus dynamic `<session_id>` completion.
+- **Context-window efficiency analyzer** (`context_analyzer.py`): per-turn window
+  utilization with an ASCII chart and a waste indicator.
+  `claudestudio context-analysis <id> [--last]`,
+  `GET /api/session/{id}/context-analysis`, `GET /api/efficiency/context`, MCP tool
+  #35 `get_context_analysis`. New derived `sessions.context_utilization_pct` column.
+- **Per-model analytics** (`model_analytics.py`): cost, tokens, health and
+  tool-success rate by exact model slug, plus a history-grounded recommender and an
+  SVG bar chart. `claudestudio model-stats`, `GET /api/analytics/models`, MCP tool
+  #36 `get_model_analytics`.
+- **Collaborative annotations** (`collab_annotations.py`): share your annotation
+  layer as portable JSON. `claudestudio annotations export|import [--merge|--replace]`,
+  `GET /api/annotations/export`, `POST /api/annotations/import`, MCP tools #37/#38
+  `export_annotations` / `import_annotations`. 100% local, file-based.
+- **Jupyter notebook export** (`notebook_export.py`): `claudestudio export --format
+  ipynb <id>` and `GET /api/session/{id}/export.ipynb` produce a valid nbformat v4
+  notebook (prompts/replies as markdown cells, tool calls as code cells).
+- **Eight new docs**: `docs/AI_ANALYSIS.md`, `SEMANTIC_SEARCH.md`, `CLUSTERING.md`,
+  `COMPLETIONS.md`, `CONTEXT_ANALYSIS.md`, `MODEL_ANALYTICS.md`,
+  `COLLAB_ANNOTATIONS.md`, `NOTEBOOK_EXPORT.md`.
+
+### Changed
+- MCP server now exposes **38 tools** (was 30); `docs/MCP.md` and `docs/API.md`
+  document every new tool and endpoint.
+- `reindex` now incrementally refreshes the TF-IDF vectors and the context
+  utilization column (best-effort; never fails an index run).
+- Self-test grows to **1145 checks** (`ALLPASS` required before release).
+
+### Migrations
+- **Schema v7 → v8** (in place, additive): adds `ai_usage`, `session_vectors` and
+  `session_clusters` tables and a nullable `sessions.context_utilization_pct`
+  column. An old v7 index opens cleanly and keeps every session and all user
+  state; the derived tables backfill on the next reindex. A v8 index opened by an
+  older build fails loudly with a version-mismatch message.
+
+### Security
+- AI analysis is the only module that can make a network call, and only when
+  `ANTHROPIC_API_KEY` is set; the request targets a fixed `https://api.anthropic.com`
+  host via `urllib`. All other endpoints remain 100% local (`127.0.0.1`).
+- All new SQL is parameterized; annotation import validates every entry and can
+  never write outside the local index.
+
 ## [0.6.3] - 2026-06-27
 
 The **"Community & Clarity"** release. v0.6.3 transforms ClaudeStudio from a

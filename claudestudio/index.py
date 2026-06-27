@@ -56,7 +56,7 @@ from .parser import ParsedSession
 # creates the table (schema script, IF NOT EXISTS) and bumps the version; no data
 # is lost. Webhook config (v0.6.2) rides in the existing `preferences` table, so
 # it needs no schema change.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     cost_usd     REAL,
     file_path    TEXT,
     preview      TEXT,
-    health_score INTEGER
+    health_score INTEGER,
+    context_utilization_pct REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_last  ON sessions(last_epoch DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_proj  ON sessions(project);
@@ -296,6 +297,41 @@ CREATE TABLE IF NOT EXISTS search_history (
     searched_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(searched_at DESC);
+
+-- v8 (v0.7.0): opt-in AI analysis cache + cost ledger. Every AI call (only ever
+-- made when the user set ANTHROPIC_API_KEY) records its token usage and cost here,
+-- and caches the structured summary JSON so a re-fetch is instant and free. Derived
+-- data keyed by session; an old index starts empty. Never written without a key.
+CREATE TABLE IF NOT EXISTS ai_usage (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id        TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    cost_usd          REAL NOT NULL,
+    summary_json      TEXT,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_session ON ai_usage(session_id);
+
+-- v8 (v0.7.0): per-session TF-IDF term vectors for local semantic search and
+-- clustering. Pure derived data (top-200 terms, JSON {term: weight}); safe to
+-- DELETE FROM and rebuild without any data loss. Keyed by session_id.
+CREATE TABLE IF NOT EXISTS session_vectors (
+    session_id TEXT PRIMARY KEY,
+    vector_json TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+-- v8 (v0.7.0): cached k-means cluster assignment per session. Derived data,
+-- invalidated/rebuilt when the corpus changes; never user state.
+CREATE TABLE IF NOT EXISTS session_clusters (
+    session_id             TEXT PRIMARY KEY,
+    cluster_id             INTEGER NOT NULL,
+    cluster_label          TEXT NOT NULL,
+    similarity_to_centroid REAL NOT NULL,
+    clustered_at           TEXT NOT NULL
+);
 """
 
 
@@ -378,6 +414,16 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     # empty table here and keeps every session, favorite, note, tag and annotation
     # intact — nothing to copy or backfill, so recording the version below is the
     # whole migration.
+    # v8 (v0.7.0): the Intelligence Layer. `ai_usage`, `session_vectors` and
+    # `session_clusters` are created by the schema script (IF NOT EXISTS) and hold
+    # derived data only (AI cache, TF-IDF vectors, cluster assignments) — an old v7
+    # index gains the empty tables here and keeps every session and all user state.
+    # The one ALTER is the derived `context_utilization_pct` column on `sessions`
+    # (nullable, backfilled lazily on the next reindex). Same dual pattern as
+    # `health_score`: a fresh db gets the column from the schema script above, an
+    # old v7 db gains it here — idempotent, guarded on the live column set.
+    if "context_utilization_pct" not in sess_cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN context_utilization_pct REAL")
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),
@@ -446,7 +492,7 @@ def _insert_session(conn, ps: ParsedSession) -> None:
     conn.execute(
         """INSERT OR REPLACE INTO sessions VALUES
            (:sid,:title,:project,:pname,:branch,:version,:fts,:lts,:fe,:le,:dur,
-            :mc,:um,:am,:tc,:models,:pm,:it,:ot,:cw,:cr,:cost,:fp,:prev,:health)""",
+            :mc,:um,:am,:tc,:models,:pm,:it,:ot,:cw,:cr,:cost,:fp,:prev,:health,:cu)""",
         {
             "sid": ps.session_id, "title": ps.title, "project": ps.project,
             "pname": project_name, "branch": ps.git_branch, "version": ps.version,
@@ -458,6 +504,8 @@ def _insert_session(conn, ps: ParsedSession) -> None:
             "it": ps.total_input, "ot": ps.total_output, "cw": ps.total_cache_write,
             "cr": ps.total_cache_read, "cost": ps.cost_usd, "fp": ps.file_path,
             "prev": preview, "health": health_score,
+            # context_utilization_pct: derived, backfilled by context_analyzer on demand
+            "cu": None,
         },
     )
     conn.execute(
@@ -641,6 +689,17 @@ def reindex(
         (json.dumps(roots),),
     )
     conn.commit()
+
+    # v0.7.0: refresh derived intelligence-layer data when sessions changed.
+    # Incremental and best-effort — never let it fail an index run.
+    if added or updated or removed:
+        try:
+            from . import context_analyzer, semantic
+            semantic.build_vectors(conn, rebuild=bool(removed))
+            context_analyzer.backfill_utilization(conn)
+        except Exception:  # noqa: BLE001 — derived data is best-effort
+            pass
+
     return {
         "root": roots[0], "roots": roots, "files": total, "added": added,
         "updated": updated, "skipped": skipped, "removed": removed,

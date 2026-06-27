@@ -148,6 +148,15 @@ def test_registry_checksum_mismatch_aborts(tmp_path):
     assert not os.path.isfile(os.path.join(pdir, "bad.py"))
 
 
+def test_registry_rejects_traversal_name(tmp_path):
+    evil = {"version": 1, "plugins": [{
+        "name": "../../evil", "url": "https://raw.githubusercontent.com/i/c/e.py"}]}
+    pdir = os.path.join(str(tmp_path), "plugins")
+    with pytest.raises(preg.RegistryError):
+        preg.install_plugin("../../evil", registry=evil, fetcher=lambda u: b"x",
+                            yes=True, pdir=pdir)
+
+
 def test_registry_offline_degrades_to_empty():
     def boom(url):
         raise OSError("offline")

@@ -1921,8 +1921,7 @@ def run() -> int:
             # confirm-required when no --yes and no callback
             cr = preg.install_plugin("demo", registry=_reg, fetcher=_fetch_ok, pdir=pdir)
             c.eq(cr["status"], "confirm_required", "registry: install asks for confirmation")
-            c.ok(cr["url"].startswith("https://raw.githubusercontent.com"),
-                 "registry: confirm shows the real URL")
+            c.eq(cr["url"], _reg["plugins"][0]["url"], "registry: confirm shows the real URL")
             # happy path with --yes
             ins = preg.install_plugin("demo", registry=_reg, fetcher=_fetch_ok, yes=True, pdir=pdir)
             c.eq(ins["status"], "installed", "registry: install writes the plugin")
@@ -1958,6 +1957,16 @@ def run() -> int:
                  "registry: remove deletes the file")
             c.eq(preg.remove_plugin("ghost", pdir=pdir)["status"], "not_installed",
                  "registry: remove of a non-installed plugin is graceful")
+            # a hostile registry name can't escape the plugins dir
+            _evil = {"version": 1, "plugins": [
+                {"name": "../../evil", "url": "https://raw.githubusercontent.com/i/c/e.py"}]}
+            _raised = False
+            try:
+                preg.install_plugin("../../evil", registry=_evil, fetcher=_fetch_ok,
+                                    yes=True, pdir=pdir)
+            except preg.RegistryError:
+                _raised = True
+            c.ok(_raised, "registry: traversal in a plugin name is rejected")
         # network failure degrades to the empty cached registry, not a crash
         def _fetch_boom(url):
             raise OSError("offline")

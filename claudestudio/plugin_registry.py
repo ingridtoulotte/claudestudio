@@ -42,6 +42,22 @@ class RegistryError(Exception):
     """A registry operation failed (bad URL, checksum mismatch, network, …)."""
 
 
+def _safe_name(name: str) -> str:
+    """Return `name` iff it is a bare plugin name; else raise.
+
+    The registry JSON is fetched from an allowlisted host but its *contents* are
+    not signed, so a hostile entry could carry ``name: "../../evil"``. Since the
+    name becomes a filename (`<name>.py`) under the plugins dir, reject anything
+    with a path separator, a parent ref, a leading dot, or other surprises —
+    defence in depth so an install can never write outside the plugins dir.
+    """
+    n = str(name or "").strip()
+    if (not n or "/" in n or "\\" in n or n.startswith(".")
+            or os.path.basename(n) != n or n != os.path.normpath(n)):
+        raise RegistryError(f"unsafe plugin name: {name!r}")
+    return n
+
+
 def cache_path() -> str:
     return os.path.join(os.path.expanduser("~"), ".claudestudio", "registry_cache.json")
 
@@ -222,10 +238,11 @@ def install_plugin(name: str, *, registry: dict | None = None, fetcher=None,
     entry = _find(reg, name)
     if entry is None:
         raise RegistryError(f"no plugin named {name!r} in the registry")
+    safe = _safe_name(entry.get("name") or name)
     url = validate_url(entry.get("url") or "")
 
     d = pdir or plugins_dir()
-    dest = os.path.join(d, name + ".py")
+    dest = os.path.join(d, safe + ".py")
     if os.path.exists(dest) and not overwrite:
         return {"status": "already_installed", "name": name, "path": dest}
 
@@ -254,8 +271,9 @@ def install_plugin(name: str, *, registry: dict | None = None, fetcher=None,
 
 
 def remove_plugin(name: str, *, pdir: str | None = None) -> dict:
+    safe = _safe_name(name)
     d = pdir or plugins_dir()
-    dest = os.path.join(d, name + ".py")
+    dest = os.path.join(d, safe + ".py")
     if not os.path.isfile(dest):
         return {"status": "not_installed", "name": name}
     try:

@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-06-27
+
+The **"Community & Clarity"** release. v0.6.3 transforms ClaudeStudio from a
+power-user tool into a community platform: a plugin registry with curated
+extensions, a mobile-responsive UI, persistent search history, GitHub Actions
+CI integration, session templates to kickstart new Claude Code windows, a
+tool-chain visualizer, a first-run guided tour, and the community infrastructure
+(CONTRIBUTING.md, SECURITY.md, issue templates, plugin registry) that a healthy
+OSS project deserves. Self-test grows 729 → 858 checks; MCP server 26 → 30
+tools; schema migrates in place to v7. CODE_OF_CONDUCT.md is untouched.
+
+### Added
+- **First-run guided tour** (`onboarding.py`, `web/tour.js`): a pure-JS, zero-dep
+  five-step overlay shown on a fresh install, replayable with `?tour=1`. Tour
+  state lives in the `preferences` table (`tour_completed`). New
+  `GET /api/onboarding/status` + `GET /api/onboarding/tour`, MCP tool #27
+  `get_onboarding_status`, and a terminal version via `claudestudio tour`.
+- **Community plugin registry** (`plugin_registry.py`, `docs/PLUGIN_REGISTRY.md`):
+  discover and install community plugins without copying files. CLI
+  `plugins list|install|remove|info|update`. HTTPS-only fetches from a hardcoded
+  `raw.githubusercontent.com` allowlist, confirm-before-download (`--yes` for CI),
+  and optional SHA-256 verification before anything is written. New
+  `GET /api/plugins/registry` + `GET /api/plugins/installed`, MCP tools #28
+  `list_registry_plugins` & #29 `get_plugin_info`. Three working seed plugins
+  ship in `registry/` (`slack_notify`, `github_status`, `ascii_report`).
+- **Mobile-responsive UI** (`web/styles.css`, `web/app.js`): breakpoints at
+  ≤768px (mobile) and 769–1024px (tablet); the sidebar collapses to a 5-icon
+  bottom nav; 44px touch targets; a full-screen search palette; PWA meta tags for
+  iOS installability. Desktop (>1024px) is unchanged. No new dependencies.
+- **Persistent search history** (`search_history.py`, schema v7 `search_history`
+  table): the last 200 searches are remembered and surfaced as suggestions in the
+  ⌘K palette (rerun, delete with `Delete`, "Clear history"). New
+  `GET/DELETE /api/search/history`, MCP tool #30 `get_search_history`, CLI
+  `search-history [--limit] [--clear]`, keyboard `H`.
+- **GitHub Actions integration** (`github_action.py`,
+  `.github/workflows/session-summary.yml`, `docs/GITHUB_ACTIONS.md`): a reusable
+  workflow + a standalone module that turns a session JSONL into a compact
+  Markdown summary (cost, tokens, tool success, health, top files, prompts). CLI
+  `github-summary --session <path>|--last`.
+- **Tool Chain Visualizer** (`tool_chains.py`): the most common
+  `tool_A → tool_B → tool_C` sequences as a server-rendered Sankey-style SVG plus
+  a ranked table with avg cost and health. New `GET /api/tool-chains` +
+  `GET /api/tool-chains/svg`, surfaced in the Patterns view.
+- **Session templates** (`templates.py`, `claudestudio/data/templates/`): pick a
+  template (`refactor`, `debug`, `new-feature`, `review`), fill the blanks, and
+  copy a ready-to-paste context block — with `{auto-context}` filled
+  deterministically from your history. New `GET /api/templates`,
+  `GET /api/templates/{name}`, `POST /api/templates/{name}/render`; CLI
+  `template list|use|create`; keyboard `N` opens the picker.
+- **Community infrastructure**: a v0.6.x `SECURITY.md` (plugin-registry + webhook
+  scope, 48h/14-day response timeline), an overhauled `CONTRIBUTING.md` (pipeline
+  diagram, "add an MCP tool" guide), and a new `plugin_submission.yml` issue form.
+
+### Changed
+- README overhauled for the OSS program: new badges, a comparison table, a
+  collapsible roadmap, a Community section, and a "What's new in v0.6.3" section.
+- `docs/API.md` (now covers v0.6.3 / schema v7) and `docs/MCP.md` (30 tools, with
+  the previously-missing v0.6.2 rows backfilled) updated for every new endpoint.
+- `preferences_set` now also persists the allowlisted `tour_completed` key; other
+  unknown keys remain ignored.
+- `pyproject.toml`: version 0.6.3, new keywords, `Typing :: Typed` classifier, and
+  `data/templates/*.md` bundled in the wheel.
+
+### Migrations
+- **Schema v7** adds the `search_history` table (user-owned, survives reindexing).
+  In-place and additive — an old v6 index gains the empty table on the next open
+  and keeps every session, favorite, note, tag, annotation and budget. An index
+  written by a newer ClaudeStudio still fails loudly with a clear version message.
+
+### Security
+- The plugin registry fetches over **HTTPS only**, from a **hardcoded
+  `raw.githubusercontent.com` allowlist** (not configurable), shows the URL and
+  asks for confirmation before download, re-validates the URL after any redirect,
+  and verifies a SHA-256 checksum (when present) before writing to disk.
+- Search-history writes go through a short-lived writable connection so the
+  read-only request path stays read-only.
+
 ## [0.6.2] - 2026-06-26
 
 The **"Insight Engine"** release. v0.6.2 turns ClaudeStudio from a recorder of

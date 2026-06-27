@@ -56,7 +56,7 @@ from .parser import ParsedSession
 # creates the table (schema script, IF NOT EXISTS) and bumps the version; no data
 # is lost. Webhook config (v0.6.2) rides in the existing `preferences` table, so
 # it needs no schema change.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 # Back-compat alias for callers/tests that want the explicit name.
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 
@@ -282,6 +282,20 @@ CREATE TABLE IF NOT EXISTS session_errors (
 );
 CREATE INDEX IF NOT EXISTS idx_session_errors_type ON session_errors(error_type);
 CREATE INDEX IF NOT EXISTS idx_session_errors_session ON session_errors(session_id);
+
+-- v7 (v0.6.3): persistent search history. User-owned (the searches you ran),
+-- never wiped by reindexing. Capped at SEARCH_HISTORY_MAX rows (oldest pruned on
+-- insert) so it can never grow without bound. `kind` mirrors the optional search
+-- filter (user|assistant|tool|NULL); `searched_at` is unix epoch seconds.
+CREATE TABLE IF NOT EXISTS search_history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    query        TEXT    NOT NULL,
+    kind         TEXT,
+    project      TEXT,
+    result_count INTEGER,
+    searched_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(searched_at DESC);
 """
 
 
@@ -359,6 +373,11 @@ def maybe_migrate(conn: sqlite3.Connection) -> None:
     # v6 (v0.6.2): `session_errors` is created by the schema script (IF NOT EXISTS)
     # and populated lazily on the next reindex (derived data, never user state), so
     # there is nothing to migrate beyond recording the version below.
+    # v7 (v0.6.3): `search_history` is created by the schema script (IF NOT EXISTS)
+    # and holds user state only (the searches you ran). An old v6 index gains the
+    # empty table here and keeps every session, favorite, note, tag and annotation
+    # intact — nothing to copy or backfill, so recording the version below is the
+    # whole migration.
     conn.execute(
         "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
         (str(SCHEMA_VERSION),),

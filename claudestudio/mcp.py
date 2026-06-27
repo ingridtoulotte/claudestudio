@@ -274,6 +274,32 @@ def _t_get_budget_forecast(conn, args: dict) -> dict:
     return api.budget_forecast(conn)
 
 
+# --- v0.6.3 tools (#27–#30, "Community & Clarity") -------------------------
+
+def _t_get_onboarding_status(conn, args: dict) -> dict:
+    """Whether the first-run tour is done, the hook is installed, etc."""
+    from . import onboarding
+    return onboarding.onboarding_status(conn)
+
+
+def _t_list_registry_plugins(conn, args: dict) -> dict:
+    """The community plugin registry with each plugin's installed status."""
+    from . import plugin_registry
+    return plugin_registry.list_plugins()
+
+
+def _t_get_plugin_info(conn, args: dict) -> dict:
+    """Full metadata for one registry plugin (description, tags, author, url)."""
+    from . import plugin_registry
+    return plugin_registry.plugin_info(str(args.get("name") or ""))
+
+
+def _t_get_search_history(conn, args: dict) -> dict:
+    """The user's recent searches, with result counts and timestamps."""
+    from . import search_history
+    return search_history.history_payload(conn, {"limit": args.get("limit", 20)})
+
+
 TOOLS = [
     {
         "name": "search_sessions",
@@ -557,6 +583,37 @@ TOOLS = [
         "description": "Project end-of-month spend at the current pace, identify the biggest cost-driver project, how many sessions until the budget ceiling, and the most wasteful (expensive + low-health) spending pattern.",
         "inputSchema": {"type": "object", "properties": {}},
         "handler": _t_get_budget_forecast,
+    },
+    {
+        "name": "get_onboarding_status",
+        "description": "Report onboarding signals for this install: whether the first-run tour is complete, the SessionEnd hook is installed, how many sessions are indexed, and whether a budget is set. Use to tell whether the user has finished setup.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_get_onboarding_status,
+    },
+    {
+        "name": "list_registry_plugins",
+        "description": "List the curated community plugin registry — each plugin's name, description, tags, author and whether it is already installed. Read-only; reads the locally cached registry.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": _t_list_registry_plugins,
+    },
+    {
+        "name": "get_plugin_info",
+        "description": "Full metadata for one named registry plugin (description, tags, author, source URL, installed status).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "the plugin name"}},
+            "required": ["name"],
+        },
+        "handler": _t_get_plugin_info,
+    },
+    {
+        "name": "get_search_history",
+        "description": "The user's most recent searches, with the result count and timestamp of each. Use to understand what the user has been investigating across sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "max entries (default 20)"}},
+        },
+        "handler": _t_get_search_history,
     },
 ]
 

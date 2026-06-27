@@ -15,14 +15,17 @@ Explore, search, replay, and understand every Claude Code session — all on you
 ![License](https://img.shields.io/badge/license-MIT-blue)
 [![Changelog](https://img.shields.io/badge/changelog-read-9a8cff)](CHANGELOG.md)
 [![Works with Claude Code](https://img.shields.io/badge/works%20with-Claude%20Code-9a8cff)](https://claude.ai/code)
-![Plugins](https://img.shields.io/badge/plugins-extensible-9a8cff)
-![Self-test](https://img.shields.io/badge/self--test-729%2B%20checks-5ec98a)
-![MCP Tools](https://img.shields.io/badge/MCP%20tools-26-9a8cff)
-![Schema](https://img.shields.io/badge/schema-v6-9a8cff)
+![Plugins](https://img.shields.io/badge/plugins-registry-9a8cff)
+![Self-test](https://img.shields.io/badge/self--test-858%2B%20checks-5ec98a)
+![MCP Tools](https://img.shields.io/badge/MCP%20tools-30-9a8cff)
+![Schema](https://img.shields.io/badge/schema-v7-9a8cff)
 [![Release](https://img.shields.io/github/v/release/ingridtoulotte/claudestudio?color=9a8cff&label=release)](https://github.com/ingridtoulotte/claudestudio/releases)
 [![PyPI](https://img.shields.io/pypi/v/claudestudio)](https://pypi.org/project/claudestudio/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/claudestudio)](https://pypi.org/project/claudestudio/)
 [![Discussions](https://img.shields.io/github/discussions/ingridtoulotte/claudestudio)](https://github.com/ingridtoulotte/claudestudio/discussions)
+[![Contributing](https://img.shields.io/badge/contributing-welcome-5ec98a)](CONTRIBUTING.md)
+[![Plugin Registry](https://img.shields.io/badge/plugins-registry-9a8cff)](registry/plugins.json)
+[![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-2088ff)](docs/GITHUB_ACTIONS.md)
 [![Last Commit](https://img.shields.io/github/last-commit/ingridtoulotte/claudestudio)](https://github.com/ingridtoulotte/claudestudio/commits/main)
 [![Stars](https://img.shields.io/github/stars/ingridtoulotte/claudestudio?style=social)](https://github.com/ingridtoulotte/claudestudio/stargazers)
 
@@ -39,6 +42,11 @@ Explore, search, replay, and understand every Claude Code session — all on you
 <sub><i>Replay any session like a movie — prompt → thinking → tool calls → result, on a scrubable timeline.</i></sub>
 
 </div>
+
+---
+
+> 🌍 **Built by and for Claude Code developers.** Using ClaudeStudio?
+> [Leave a review in Discussions →](https://github.com/ingridtoulotte/claudestudio/discussions) or submit a plugin to the [registry](registry/plugins.json).
 
 ---
 
@@ -79,6 +87,41 @@ Explore, search, replay, and understand every Claude Code session — all on you
 - 🔔 **Local webhooks** — POST alerts to a loopback/LAN URL on new sessions, budget alerts, or low health — RFC-1918 enforced so data never leaves your network. *(new in v0.6.2)*
 - ✅ **CLAUDE.md verification** — `claudestudio verify-claude-md` scores each claim in your `CLAUDE.md` against what Claude Code actually did (✅ verified / ⚠️ stale / ❓ unverifiable). *(new in v0.6.2)*
 - 📈 **Budget forecasting** — project end-of-month spend at the current pace, the biggest cost driver, and the most wasteful (expensive + low-health) pattern. *(new in v0.6.2)*
+
+---
+
+## 🆕 What's new in v0.6.3
+
+The **Community & Clarity** release — ClaudeStudio grows from a power-user tool into a community platform. Schema migrates in place to **v7**; self-test **729 → 858**; MCP **26 → 30 tools**. Still 100% local, zero dependencies, deterministic.
+
+- **🎬 First-run guided tour** — a pure-JS, zero-dependency overlay walks new users through search, sessions, analytics and the hook on their very first launch. Replay any time with `?tour=1`, or read it in the terminal with `claudestudio tour`.
+- **🔌 Community plugin registry** — discover and install community plugins without copying files:
+
+  ```console
+  $ claudestudio plugins list
+     ○ slack_notify     Post a session summary to a Slack webhook   [notifications, slack]
+     ○ github_status    Set a GitHub commit status for a session    [github, ci]
+     ○ ascii_report     GET /api/ascii-report — today's sessions    [reporting]
+  $ claudestudio plugins install slack_notify   # HTTPS-only, allowlisted host, checksum-verified
+  ```
+
+- **📱 Mobile-responsive UI** — the sidebar collapses to a 5-icon bottom nav, 44px touch targets, a full-screen ⌘K palette, and PWA install meta tags. Desktop is unchanged. No new dependencies.
+- **🔍 Persistent search history** — your last 200 searches are remembered and surfaced as one-tap suggestions in the ⌘K palette (rerun, `Delete` to remove, "Clear history"). Press `H`.
+- **🤖 GitHub Actions integration** — a reusable workflow + `claudestudio github-summary` post a session digest (cost, tokens, tool success, health, top files) as a PR comment when Claude Code runs in CI. See [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md).
+- **📊 Tool Chain Visualizer** — a server-rendered Sankey-style SVG of your most common `tool_A → tool_B → tool_C` sequences, with avg cost and health per chain.
+- **📝 Session templates** — pick a template (`refactor`, `debug`, `new-feature`, `review`), fill the blanks, and copy a ready-to-paste context block — with `{auto-context}` filled from your own history. Press `N`.
+- **🤝 Community infrastructure** — a v0.6.x [SECURITY.md](SECURITY.md), an overhauled [CONTRIBUTING.md](CONTRIBUTING.md), and a plugin-submission issue form.
+
+<!-- TODO screenshot: docs/screenshots/v063_tour_overlay.png — First-run guided tour overlay (desktop) -->
+<!-- TODO screenshot: docs/screenshots/v063_mobile_sessions.png — Mobile session list with bottom nav -->
+<!-- TODO screenshot: docs/screenshots/v063_search_history.png — Search palette showing recent searches -->
+<!-- TODO screenshot: docs/screenshots/v063_plugin_registry.png — `claudestudio plugins list` terminal output -->
+<!-- TODO screenshot: docs/screenshots/v063_tool_chain_svg.png — Tool chain Sankey SVG in the browser -->
+<!-- TODO screenshot: docs/screenshots/v063_github_pr_comment.png — GitHub PR comment from CI integration -->
+<!-- TODO screenshot: docs/screenshots/v063_template_picker.png — Session template picker UI -->
+<!-- TODO demo: docs/demos/quickstart.gif — install → index → serve → open → click a session (30s) -->
+<!-- TODO demo: docs/demos/search_palette.gif — ⌘K, type a query, see results with history (15s) -->
+<!-- TODO demo: docs/demos/replay.gif — open a session, play, scrub the timeline (20s) -->
 
 ---
 
@@ -187,6 +230,11 @@ The **workspace, completed.** Schema migrates in place to **v4**; self-test **39
 | `T` | Cycle themes (dark → light → system → high-contrast) |
 | `n` | Open narrative for current session |
 | `d` | Open daily digest |
+| `R` | Copy a resume brief for the current session |
+| `C` | Compare two sessions |
+| `X` | Toggle the outcome trace |
+| `N` | New session from a template |
+| `H` | Open recent search history |
 
 <details><summary>What's new in v0.5.1</summary>
 
@@ -406,7 +454,12 @@ A shareable, swipeable, year-or-all-time summary of your Claude Code life. Your 
 | Inline edit diffs             | ❌                | ❌             | ❌                 | ⚠️                  | ❌                 | ✅               |
 | Token & **cost** analytics    | ❌                | ❌             | ❌                 | ✅                  | ❌                 | ✅ deterministic |
 | Grounded local Q&A (no model) | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
-| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ 26 tools      |
+| MCP server (queryable by CC)  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ 30 tools      |
+| Plugin system + registry      | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
+| Mobile-ready UI               | ❌                | ❌             | ⚠️                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
+| GitHub Actions integration    | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
+| Session templates             | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
+| Persistent search history     | ❌                | ❌             | ⚠️                 | ❌                  | ❌                 | ✅ *(v0.6.3)*    |
 | Auto-index hook + live watch  | ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
 | Automatic CLAUDE.md generation| ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
 | Budget tracking & spend alerts| ❌                | ❌             | ❌                 | ❌                  | ❌                 | ✅               |
@@ -509,12 +562,17 @@ python -m claudestudio [command]
   compare        structured diff between two sessions   <session_a> <session_b> [--json]
   verify-claude-md  check a CLAUDE.md against history    --project NAME [--json]
   webhook        manage local/LAN webhook notifications --add URL --events … | --remove URL | --list
-  --selftest     run the built-in correctness suite (729 checks, no deps)
+  tour           print the first-run guided tour (plain text)
+  plugins        discover & install community plugins   list | install | remove | info | update [--yes]
+  template       session starter templates             list | use NAME --file … --goal … | create NAME
+  search-history show or clear your recent searches     --limit N --clear --json
+  github-summary Markdown session summary for CI        --session PATH | --last
+  --selftest     run the built-in correctness suite (858 checks, no deps)
 
   shared flags:  --db <path>   --root <projects dir>
 ```
 
-**Keyboard shortcuts** (in the app): `R` copy a resume brief · `C` compare with another session · `X` toggle the prompt-to-outcome trace · `/` search · `s` star · `e` export · `T` cycle theme · `?` full cheat sheet.
+**Keyboard shortcuts** (in the app): `R` copy a resume brief · `C` compare with another session · `X` toggle the prompt-to-outcome trace · `N` new session from a template · `H` search history · `/` search · `s` star · `e` export · `T` cycle theme · `?` full cheat sheet.
 
 ```bash
 python -m claudestudio ask "what should I reopen next?"   # grounded, no model calls
@@ -581,15 +639,40 @@ ClaudeStudio is built for people who care where their data goes.
 - [x] **Local/LAN webhooks** (RFC-1918 enforced) — _v0.6.2_
 - [x] **CLAUDE.md verification** against real history — _v0.6.2_
 - [x] **Budget forecasting** (end-of-month projection + waste finder) — _v0.6.2_
-- [ ] **Next milestone:** Tauri native window + signed installers (`.dmg`, `.msi`)
-- [ ] Homebrew formula (`brew install claudestudio`)
-- [ ] VS Code extension with session deep-link support
-- [ ] Public session sharing (opt-in, locally encrypted link, no cloud backend)
-- [ ] i18n foundations (extractable string table)
-- [ ] Team/org mode (shared read-only index over local network)
-- [ ] AI-assisted session summarization (opt-in, explicit user action)
-- [ ] Obsidian plugin (via plugin API)
-- [ ] Raycast extension for quick session search
+- [x] **First-run guided tour** (zero-dep overlay + terminal) — _v0.6.3_
+- [x] **Community plugin registry** (discover + install, checksum-verified) — _v0.6.3_
+- [x] **Mobile-responsive UI** (bottom nav, touch targets, PWA meta) — _v0.6.3_
+- [x] **Persistent search history** (palette suggestions, schema v7) — _v0.6.3_
+- [x] **GitHub Actions integration** (PR-comment session summary) — _v0.6.3_
+- [x] **Tool chain visualizer** (Sankey-style SVG) — _v0.6.3_
+- [x] **Session templates** (auto-context, copy-to-clipboard) — _v0.6.3_
+
+<details><summary>🗺️ Extended roadmap (planned)</summary>
+
+### v0.7.0 — "Intelligence Layer"
+- **Opt-in AI analysis** — with `ANTHROPIC_API_KEY` set, produce rich natural-language session summaries and code-quality assessments. Fully opt-in, never default, clearly labelled.
+- **Semantic session search** — locally-stored vector embeddings for "find sessions similar in meaning to this prompt" beyond keyword matching.
+- **Session clustering** — auto-group sessions by topic with TF-IDF + k-means (stdlib math, no sklearn).
+- **Live session viewer** — watch a running session update in real time (extends the v0.5.1 watch infrastructure).
+
+### v0.7.1 — "Team Edition"
+- **Read-only shared server** — `claudestudio serve --shared --read-only` exposes the UI to the LAN with an IP allowlist, for standup dashboards.
+- **Multi-user index merge** — merge two team members' indexes into a unified read-only view.
+- **PR auto-summary** — a GitHub App that posts a session summary automatically, no workflow file.
+
+### v0.8.0 — "Developer Ecosystem"
+- **VS Code extension** — sidebar of recent sessions, quick search, "continue this session".
+- **JetBrains plugin** — the same for IntelliJ/PyCharm/WebStorm/GoLand.
+- **Neovim plugin** — a Telescope picker over your sessions.
+- **Session gallery** — opt-in public gallery of anonymised session summaries.
+
+### v1.0.0 — "Stable Foundation"
+- Stable API contract (no breaking changes without a major version).
+- Full WCAG 2.1 AA audit and remediation.
+- Localisation infrastructure (i18n-ready, English + French to start).
+- Windows `.msi` and macOS `.app` distributables; Homebrew formula; VS Code marketplace listing.
+
+</details>
 
 Ideas and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). Everything shipped so far lives in the [changelog](CHANGELOG.md).
 
@@ -602,8 +685,11 @@ or build on top of the HTTP API. See [docs/API.md](docs/API.md) for the full ref
 
 ## 🌍 Community
 
-- 💬 [GitHub Discussions](https://github.com/ingridtoulotte/claudestudio/discussions) — questions, ideas, show & tell
-- 🐛 [Issue tracker](https://github.com/ingridtoulotte/claudestudio/issues)
+- 💬 [GitHub Discussions](https://github.com/ingridtoulotte/claudestudio/discussions) — Q&A, ideas, show & tell
+- 🐛 [Issue tracker](https://github.com/ingridtoulotte/claudestudio/issues) — bug reports & feature requests
+- 🔌 [Plugin registry](registry/plugins.json) — submit your plugin via the plugin-submission issue form
+- 🤝 [Contributing](CONTRIBUTING.md) — first-contribution guide
+- 🔒 [Security](SECURITY.md) — responsible disclosure
 - 📋 [Changelog](CHANGELOG.md)
 - 🗺 [Roadmap](#-roadmap)
 
@@ -612,7 +698,7 @@ or build on top of the HTTP API. See [docs/API.md](docs/API.md) for the full ref
 ClaudeStudio is **infrastructure for the Claude Code community**, not a toy viewer:
 
 - **A reference parser for the Claude Code wire format.** `from claudestudio import parse_session` gives any builder a faithful, self-test-pinned reader of the `.jsonl` session format — import it instead of reverse-engineering it ([`docs/FORMAT.md`](docs/FORMAT.md)).
-- **Composable via MCP.** The 26-tool MCP server makes ClaudeStudio queryable *by Claude Code itself* — your history becomes a first-class context source for your next session.
+- **Composable via MCP.** The 30-tool MCP server makes ClaudeStudio queryable *by Claude Code itself* — your history becomes a first-class context source for your next session.
 - **Serves the entire Claude Code user base.** Anyone who runs Claude Code generates the sessions ClaudeStudio understands. It is the only zero-dependency, local-first session workspace for the tool.
 
 ClaudeStudio was built to support the **[Anthropic Claude for Open Source](https://claude.com/contact-sales/claude-for-oss)** program's vision of thriving OSS tooling around Claude Code. If ClaudeStudio is useful to you, the most impactful thing you can do is **⭐ star the repo, use it daily, and open a PR** — that's how a quietly-depended-on tool earns its place.

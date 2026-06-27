@@ -1,0 +1,59 @@
+name: 🔌 Plugin submission
+description: Submit a community plugin for the ClaudeStudio registry
+labels: ["plugin", "community"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a plugin! ClaudeStudio plugins are **stdlib-only**, have
+        **no telemetry**, and make **no outbound network calls without explicit
+        user configuration**. See [docs/PLUGIN_REGISTRY.md](https://github.com/ingridtoulotte/claudestudio/blob/main/docs/PLUGIN_REGISTRY.md).
+  - type: input
+    id: name
+    attributes:
+      label: Plugin name
+      description: Lowercase, no spaces — becomes `<name>.py`
+      placeholder: "slack_notify"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One or two sentences on what it does
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Link to source
+      description: An HTTPS link to the plugin's `.py` file (GitHub raw preferred)
+      placeholder: "https://raw.githubusercontent.com/you/repo/main/plugin.py"
+    validations:
+      required: true
+  - type: input
+    id: tags
+    attributes:
+      label: Tags
+      description: Comma-separated, for discovery
+      placeholder: "notifications, slack"
+  - type: dropdown
+    id: tested
+    attributes:
+      label: Have you tested it?
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Plugin checklist
+      options:
+        - label: Standard library only (no third-party imports)
+          required: true
+        - label: No telemetry
+          required: true
+        - label: No outbound network calls without explicit user configuration
+          required: true

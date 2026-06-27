@@ -329,6 +329,11 @@ class Handler(BaseHTTPRequestHandler):
                 # Route: POST /api/webhooks  (register a local/LAN webhook)
                 if path == "/api/webhooks":
                     return self._send_json(api.webhooks_add(conn, body))
+                # --- v0.6.3 write endpoints ---
+                # Route: POST /api/templates/{name}/render
+                if path.startswith("/api/templates/") and path.endswith("/render"):
+                    name = unquote(path[len("/api/templates/"):-len("/render")])
+                    return self._send_json(api.template_render(conn, name, body))
             finally:
                 conn.close()
         except api.ApiError as exc:
@@ -377,6 +382,14 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/webhooks/"):
                     wid = unquote(path[len("/api/webhooks/"):])
                     return self._send_json(api.webhooks_remove(conn, wid))
+                # --- v0.6.3 delete endpoints ---
+                # Route: DELETE /api/search/history/{id}  (one entry)
+                if path.startswith("/api/search/history/"):
+                    eid = unquote(path[len("/api/search/history/"):])
+                    return self._send_json(api.delete_search_history_one(conn, eid))
+                # Route: DELETE /api/search/history       (clear all)
+                if path == "/api/search/history":
+                    return self._send_json(api.clear_search_history(conn))
             finally:
                 conn.close()
         except api.ApiError as exc:
@@ -394,7 +407,9 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/sessions":
                     return self._send_json(api.list_sessions(conn, params))
                 if path == "/api/search":
-                    return self._send_json(api.search(conn, params))
+                    result = api.search(conn, params)
+                    self._record_search(params, result)
+                    return self._send_json(result)
                 if path == "/api/analytics":
                     return self._send_json(api.analytics_payload(conn))
                 if path == "/api/analytics.csv":
@@ -564,6 +579,32 @@ class Handler(BaseHTTPRequestHandler):
                 if path.startswith("/api/project/") and path.endswith("/verify-claude-md"):
                     pid = unquote(path[len("/api/project/"):-len("/verify-claude-md")])
                     return self._send_json(api.verify_claude_md(conn, pid))
+                # --- v0.6.3 read endpoints (Community & Clarity) ---
+                if path == "/api/onboarding/status":
+                    return self._send_json(
+                        api.onboarding_status_payload(conn, db_path=self.db_path))
+                if path == "/api/onboarding/tour":
+                    return self._send_json(api.tour_payload(conn, db_path=self.db_path))
+                if path == "/api/plugins/registry":
+                    return self._send_json(api.plugins_registry_payload(conn))
+                if path == "/api/plugins/installed":
+                    return self._send_json(api.plugins_installed_payload(conn))
+                if path == "/api/plugins/info":
+                    return self._send_json(
+                        api.plugin_info_payload(conn, params.get("name", "")))
+                if path == "/api/search/history":
+                    return self._send_json(api.search_history_payload(conn, params))
+                if path == "/api/tool-chains/svg":
+                    return self._send_bytes(
+                        api.tool_chains_svg(conn, params).encode("utf-8"),
+                        "image/svg+xml")
+                if path == "/api/tool-chains":
+                    return self._send_json(api.tool_chains_payload(conn, params))
+                if path == "/api/templates":
+                    return self._send_json(api.templates_list(conn))
+                if path.startswith("/api/templates/"):
+                    name = unquote(path[len("/api/templates/"):])
+                    return self._send_json(api.template_get(conn, name))
                 if path.startswith("/api/session/"):
                     sid = path[len("/api/session/"):]
                     data = api.get_session(conn, sid)
@@ -577,6 +618,27 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": str(exc)}, status=500)
         return self._send_json({"error": "not found"}, status=404)
+
+    def _record_search(self, params, result):
+        """Persist a non-empty search to history on a short-lived writable conn.
+
+        The GET read path uses a read-only connection (``query_only``), so the
+        write goes through its own ``connect`` handle. Best-effort: a history
+        write must never break the search response.
+        """
+        q = (params.get("q") or "").strip()
+        if not q:
+            return
+        try:
+            wconn = self._conn()
+            try:
+                api.record_search(
+                    wconn, q, kind=params.get("kind"), project=params.get("project"),
+                    result_count=len(result.get("results", [])))
+            finally:
+                wconn.close()
+        except Exception:  # noqa: BLE001 — history is a convenience, never fatal
+            pass
 
     def _serve_events(self):
         """Server-Sent Events stream: tell the SPA when the index changes.

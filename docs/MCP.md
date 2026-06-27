@@ -81,6 +81,16 @@ JSON document.
 | `get_session_tags` | `session_id: str` | The tags applied to a specific session (`id`, `name`, `colour`). *(v0.6.1)* |
 | `get_session_narrative` | `session_id: str` | A deterministic narrative of a session: goal, approach, outcome, files changed, errors, recovery, next steps, quality. No model calls. *(v0.6.1)* |
 | `get_file_heatmap` | `project_id?: str`, `since?: str`, `until?: str` | The top-10 hottest files with `heat_score`, `edit_count`, `session_count`. *(v0.6.1)* |
+| `generate_resume_brief` | `session_id: str` | A copy-paste-ready brief to resume a session: last tools, recent errors, branch/SHA, open questions. *(v0.6.2)* |
+| `compare_sessions` | `session_id_a: str`, `session_id_b: str` | Cost/token/health deltas, prompt overlap, shared files, and a plain-English verdict. *(v0.6.2)* |
+| `get_error_taxonomy` | `project?: str`, `since?: str` | Error-type distribution across sessions, worst sessions, weekly trend. *(v0.6.2)* |
+| `verify_claude_md` | `project_id: str` | Score a project's CLAUDE.md claims against its real session history. *(v0.6.2)* |
+| `search_by_error_type` | `error_type: str`, `limit?: int = 20` | Sessions containing errors of a taxonomy type, most recent first. *(v0.6.2)* |
+| `get_budget_forecast` | _(none)_ | End-of-month spend projection, biggest driver, sessions-until-limit, efficiency opportunity. *(v0.6.2)* |
+| `get_onboarding_status` | _(none)_ | First-run signals: `tour_completed`, `hook_installed`, `sessions_indexed`, `budget_set`. *(v0.6.3)* |
+| `list_registry_plugins` | _(none)_ | The community plugin registry with each plugin's installed status. *(v0.6.3)* |
+| `get_plugin_info` | `name: str` | Full metadata for one registry plugin (description, tags, author, url). *(v0.6.3)* |
+| `get_search_history` | `limit?: int = 20` | The user's recent searches, with result counts and timestamps. *(v0.6.3)* |
 
 ### v0.6.1 tool examples
 
@@ -185,7 +195,7 @@ Standard MCP / JSON-RPC 2.0. The server implements `initialize`, `tools/list`,
 {"jsonrpc":"2.0","id":1,"result":{
   "protocolVersion":"2024-11-05",
   "capabilities":{"tools":{"listChanged":false}},
-  "serverInfo":{"name":"claudestudio","version":"0.6.1"}}}
+  "serverInfo":{"name":"claudestudio","version":"0.6.3"}}}
 
 // → call a tool
 {"jsonrpc":"2.0","id":2,"method":"tools/call",

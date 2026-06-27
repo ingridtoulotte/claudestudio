@@ -16,7 +16,8 @@ dashboards, editor integrations.
 - **Errors:** failures return a JSON body `{"error": "..."}` with an appropriate
   status (`404` not found, `500` on an unexpected error) — never a raw traceback.
 - **Versioning:** the API has been stable since v0.4.0. New endpoints are
-  additive; existing shapes don't break. (This document covers v0.5.2.)
+  additive; existing shapes don't break. (This document covers **v0.6.3**,
+  **schema v7**.)
 
 All responses are `application/json; charset=utf-8` unless noted (CSV, HTML,
 Markdown and ZIP exports set their own content type + `Content-Disposition`).
@@ -328,6 +329,56 @@ Persist preferences. Body `{"theme":"light"}` (one of `dark`, `light`, `system`,
 A fully self-contained share pack: one HTML file with the session inlined,
 read-only replay, no server, no network. `?annotations=0` omits personal notes.
 `text/html` (attachment). Unknown id → `404`.
+
+---
+
+## v0.6.3 — Community & Clarity
+
+### `GET /api/onboarding/status`
+The four first-run signals: `{tour_completed, hook_installed, sessions_indexed,
+budget_set}`. Used by the guided tour to decide whether to show itself.
+
+### `GET /api/onboarding/tour`
+The tour content plus status: `{steps: [{id, title, body, target, cta}], status}`.
+
+### `GET /api/plugins/registry`
+The cached community plugin registry, each entry annotated with `installed`:
+`{version, plugins: [{name, description, author, version, tags, url, installed}]}`.
+Reads the local cache; refresh with `claudestudio plugins update`.
+
+### `GET /api/plugins/installed`
+`{installed: ["name", …]}` — the plugins currently in `~/.claudestudio/plugins/`.
+
+### `GET /api/plugins/info?name=<name>`
+Full metadata for one registry plugin. Unknown name → `404`.
+
+### `GET /api/search/history?limit=20`
+Recent searches, newest first:
+`{history: [{id, query, kind, project, result_count, searched_at}], count}`.
+The history is also written on every `GET /api/search` call. Max 200 rows.
+
+### `DELETE /api/search/history`
+Clear all history. `DELETE /api/search/history/{id}` removes one entry.
+
+### `GET /api/tool-chains?days=30&project=&limit=10`
+The most common `tool_A → tool_B → tool_C` sequences:
+`{chains: [{tools, label, count, sessions, avg_cost, avg_health}], days, project}`.
+The `days` window is relative to your newest session.
+
+### `GET /api/tool-chains/svg?days=30`
+A Sankey-style SVG of the tool-chain flow (`image/svg+xml`), rendered server-side
+with `xml.etree`.
+
+### `GET /api/templates`
+`{templates: [{name, source, vars, title}]}` — built-in + user session templates.
+
+### `GET /api/templates/{name}`
+One template: `{name, source, body, vars}`. Unknown name → `404`.
+
+### `POST /api/templates/{name}/render`
+Body `{"vars": {"file": "src/auth.py", "goal": "async"}, "include_context": true}`.
+Returns `{name, rendered, missing, source}`. `{auto-context}` is filled
+deterministically from your history. Unknown name → `404`.
 
 ---
 

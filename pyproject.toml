@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claudestudio"
-version = "0.6.2"
+version = "0.6.3"
 description = "The desktop workspace for Claude Code — explore, search and replay every session, with a built-in MCP server, tool-usage analytics and smart highlights, locally."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Ingrid Toulotte" }]
-keywords = ["claude", "claude-code", "anthropic", "mcp", "llm", "developer-tools", "session-browser", "local-first", "analytics", "bookmarks", "hooks", "live-watch", "diff-view", "report", "budget-tracker", "claude-md-generator", "session-annotations", "health-score", "prompt-library", "tags", "labels", "narrative", "digest", "heatmap", "benchmark", "plugins", "share", "themes", "session-resume", "session-compare", "error-taxonomy", "outcome-trace", "webhooks", "budget-forecast", "claude-md-verify", "insight-engine"]
+keywords = ["claude", "claude-code", "anthropic", "mcp", "llm", "developer-tools", "session-browser", "local-first", "analytics", "bookmarks", "hooks", "live-watch", "diff-view", "report", "budget-tracker", "claude-md-generator", "session-annotations", "health-score", "prompt-library", "tags", "labels", "narrative", "digest", "heatmap", "benchmark", "plugins", "plugin-registry", "share", "themes", "session-resume", "session-compare", "error-taxonomy", "outcome-trace", "webhooks", "budget-forecast", "claude-md-verify", "insight-engine", "session-templates", "github-actions", "mobile", "search-history", "tool-chains", "onboarding"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: Utilities",
+    "Typing :: Typed",
 ]
 dependencies = []  # zero — standard library only
 
@@ -57,7 +58,7 @@ include-package-data = true
 # what lets `pipx run --spec git+…/claudestudio claudestudio` work with no clone.
 # `py.typed` ships the PEP 561 marker so downstream type checkers trust our hints.
 [tool.setuptools.package-data]
-claudestudio = ["web/**/*", "web/*", "web/assets/*", "py.typed"]
+claudestudio = ["web/**/*", "web/*", "web/assets/*", "data/templates/*.md", "py.typed"]
 
 [tool.ruff]
 target-version = "py39"

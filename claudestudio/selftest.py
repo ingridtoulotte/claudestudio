@@ -561,7 +561,7 @@ def run() -> int:
         c.eq(init["result"]["serverInfo"]["version"], claudestudio.__version__,
              "mcp serverInfo carries the package version")
         tl = _rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        c.eq(len(tl["result"]["tools"]), 26, "mcp exposes 26 tools")
+        c.eq(len(tl["result"]["tools"]), 30, "mcp exposes 30 tools")
         c.ok(all(t.get("inputSchema") for t in tl["result"]["tools"]), "every mcp tool has an input schema")
         # notification (no id) gets no response
         c.ok(_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
@@ -625,12 +625,12 @@ def run() -> int:
         from . import server as servermod
 
         # --- F11: version embedded everywhere ----------------------------
-        c.eq(claudestudio.__version__, "0.6.2", "package version bumped to 0.6.2")
-        c.eq(init["result"]["serverInfo"]["version"], "0.6.2", "mcp serverInfo is 0.6.2")
+        c.eq(claudestudio.__version__, "0.6.3", "package version bumped to 0.6.3")
+        c.eq(init["result"]["serverInfo"]["version"], "0.6.3", "mcp serverInfo is 0.6.3")
         rc, out = _run(["info", "--db", db])
         c.eq(rc, 0, "cli info exits 0")
-        c.ok("0.6.2" in out, "cli info prints the version")
-        c.ok("mcp tools" in out and "26" in out, "cli info reports the 26 MCP tools")
+        c.ok("0.6.3" in out, "cli info prints the version")
+        c.ok("mcp tools" in out and "30" in out, "cli info reports the 30 MCP tools")
 
         # --- F3: inline unified diff (pure tool_diff) --------------------
         d_edit, trunc = api.tool_diff(
@@ -1017,7 +1017,7 @@ def run() -> int:
         from . import patterns as patmod2
         from . import sync as syncmod
 
-        c.eq(index.SCHEMA_VERSION, 6, "schema version is 6 (session errors)")
+        c.eq(index.SCHEMA_VERSION, 7, "schema version is 7 (search history)")
 
         # craft a session (real .jsonl → reindex) carrying GitHub refs + a
         # cross-session reference phrase + a scoreable prompt.
@@ -1818,7 +1818,7 @@ def run() -> int:
             stale_pricing=False, n_sessions=5).lower(), "doctor: rec suggests installing the hook")
 
         # --- MCP tools #21-26 ---
-        c.eq(len(mcpmod.TOOLS), 26, "mcp: exactly 26 tools")
+        c.ok(len(mcpmod.TOOLS) >= 26, "mcp: at least the 26 v0.6.2 tools present")
         new_names = {"generate_resume_brief", "compare_sessions", "get_error_taxonomy",
                      "verify_claude_md", "search_by_error_type", "get_budget_forecast"}
         c.ok(new_names <= {t["name"] for t in mcpmod.TOOLS}, "mcp: the 6 new v0.6.2 tools registered")
@@ -1839,6 +1839,295 @@ def run() -> int:
         c.ok(not e5 and "sessions" in cse, "mcp: search_by_error_type returns sessions")
         cbf, e6 = _mcp62("get_budget_forecast", {})
         c.ok(not e6 and "projected_month_usd" in cbf, "mcp: get_budget_forecast returns a projection")
+
+        # =================================================================
+        # v0.6.3 — Community & Clarity: onboarding tour, plugin registry,
+        # search history (schema v7), tool-chain visualizer, templates,
+        # github-action summary, MCP #27-30
+        # =================================================================
+        from . import github_action as ghact
+        from . import onboarding as onb
+        from . import plugin_registry as preg
+        from . import search_history as shist
+        from . import templates as tplmod
+        from . import tool_chains as tchains
+
+        # --- schema v7: search_history table present ---
+        c.eq(index.SCHEMA_VERSION, 7, "v7: schema version is 7")
+        sv = index.stored_schema_version(conn62)
+        c.eq(sv, 7, "v7: stored schema version is 7")
+        v7cols = {r[1] for r in conn62.execute("PRAGMA table_info(search_history)")}
+        c.ok({"query", "kind", "project", "result_count", "searched_at"} <= v7cols,
+             "v7: search_history has the expected columns")
+
+        # --- onboarding / first-run tour ---
+        c.eq(len(onb.TOUR_STEPS), 5, "tour: five steps")
+        c.ok(all({"id", "title", "body", "cta"} <= set(s) for s in onb.TOUR_STEPS),
+             "tour: every step has id/title/body/cta")
+        ttxt = onb.terminal_tour()
+        c.ok("guided tour" in ttxt.lower() and "1." in ttxt, "tour: terminal render lists steps")
+        c.ok("?tour=1" in ttxt, "tour: terminal render mentions the replay param")
+        ost = onb.onboarding_status(conn62)
+        c.ok(set(ost) == {"tour_completed", "hook_installed", "sessions_indexed", "budget_set"},
+             "onboarding: status has the four signals")
+        c.ok(ost["sessions_indexed"] > 0, "onboarding: sessions_indexed reflects the index")
+        c.eq(ost["tour_completed"], False, "onboarding: tour not completed by default")
+        # completing the tour persists via preferences (allowlisted key)
+        api.preferences_set(conn62, {"tour_completed": 1})
+        c.eq(onb.tour_completed(conn62), True, "onboarding: tour_completed persists")
+        c.eq(onb.onboarding_status(conn62)["tour_completed"], True,
+             "onboarding: status reflects completion")
+        # an arbitrary key is NOT stored (allowlist)
+        api.preferences_set(conn62, {"evil_key": "x"})
+        c.ok("evil_key" not in index.all_preferences(conn62),
+             "preferences: non-allowlisted key is ignored")
+        tp = onb.tour_payload(conn62)
+        c.ok(len(tp["steps"]) == 5 and "status" in tp, "tour: payload has steps + status")
+
+        # --- plugin registry (URL safety + install flow, mocked fetch) ---
+        c.eq(preg.ALLOWED_HOSTS, frozenset({"raw.githubusercontent.com"}),
+             "registry: host allowlist is exactly raw.githubusercontent.com")
+        _raised = False
+        try:
+            preg.validate_url("http://raw.githubusercontent.com/a.py")
+        except preg.RegistryError:
+            _raised = True
+        c.ok(_raised, "registry: non-HTTPS URL rejected")
+        _raised = False
+        try:
+            preg.validate_url("https://evil.example.com/a.py")
+        except preg.RegistryError:
+            _raised = True
+        c.ok(_raised, "registry: off-allowlist host rejected")
+        c.ok(preg.validate_url("https://raw.githubusercontent.com/x/y.py"),
+             "registry: valid raw URL accepted")
+        import hashlib as _hl
+        _src = b"def on_session_indexed(db, sid):\n    return None\n"
+        _good = _hl.sha256(_src).hexdigest()
+        _reg = {"version": 1, "plugins": [
+            {"name": "demo", "description": "d", "tags": ["t"], "version": "1.0.0",
+             "url": "https://raw.githubusercontent.com/i/c/main/registry/plugins/demo.py",
+             "sha256": _good},
+            {"name": "nohash", "description": "n",
+             "url": "https://raw.githubusercontent.com/i/c/main/registry/plugins/nohash.py"},
+        ]}
+
+        def _fetch_ok(url):
+            return _src
+        with tempfile.TemporaryDirectory() as pdir:
+            lp = preg.list_plugins(_reg, pdir=pdir)
+            c.eq(len(lp["plugins"]), 2, "registry: list returns both plugins")
+            c.eq(lp["plugins"][0]["installed"], False, "registry: not installed initially")
+            # confirm-required when no --yes and no callback
+            cr = preg.install_plugin("demo", registry=_reg, fetcher=_fetch_ok, pdir=pdir)
+            c.eq(cr["status"], "confirm_required", "registry: install asks for confirmation")
+            c.ok(cr["url"].startswith("https://raw.githubusercontent.com"),
+                 "registry: confirm shows the real URL")
+            # happy path with --yes
+            ins = preg.install_plugin("demo", registry=_reg, fetcher=_fetch_ok, yes=True, pdir=pdir)
+            c.eq(ins["status"], "installed", "registry: install writes the plugin")
+            c.eq(ins["verified"], True, "registry: checksum verified on install")
+            c.ok(os.path.isfile(os.path.join(pdir, "demo.py")), "registry: file landed on disk")
+            c.ok("demo" in preg.installed_names(pdir), "registry: installed_names sees it")
+            c.eq(preg.list_plugins(_reg, pdir=pdir)["plugins"][0]["installed"], True,
+                 "registry: list reports installed status")
+            # duplicate guard
+            dup = preg.install_plugin("demo", registry=_reg, fetcher=_fetch_ok, yes=True, pdir=pdir)
+            c.eq(dup["status"], "already_installed", "registry: duplicate install guarded")
+            # checksum mismatch aborts and writes nothing
+            _badreg = {"version": 1, "plugins": [
+                {"name": "bad", "url": "https://raw.githubusercontent.com/i/c/bad.py",
+                 "sha256": "deadbeef"}]}
+            _raised = False
+            try:
+                preg.install_plugin("bad", registry=_badreg, fetcher=_fetch_ok, yes=True, pdir=pdir)
+            except preg.RegistryError:
+                _raised = True
+            c.ok(_raised, "registry: checksum mismatch aborts install")
+            c.ok(not os.path.isfile(os.path.join(pdir, "bad.py")),
+                 "registry: nothing written on checksum failure")
+            # a plugin without a checksum installs but is unverified
+            nh = preg.install_plugin("nohash", registry=_reg, fetcher=_fetch_ok, yes=True, pdir=pdir)
+            c.eq(nh["verified"], False, "registry: no-checksum plugin installs unverified")
+            # info + remove
+            info = preg.plugin_info("demo", _reg, pdir=pdir)
+            c.ok(info["installed"] and info["tags"] == ["t"], "registry: plugin_info has metadata")
+            c.ok(preg.plugin_info("none", _reg, pdir=pdir).get("error"),
+                 "registry: plugin_info errors on unknown plugin")
+            c.eq(preg.remove_plugin("demo", pdir=pdir)["status"], "removed",
+                 "registry: remove deletes the file")
+            c.eq(preg.remove_plugin("ghost", pdir=pdir)["status"], "not_installed",
+                 "registry: remove of a non-installed plugin is graceful")
+        # network failure degrades to the empty cached registry, not a crash
+        def _fetch_boom(url):
+            raise OSError("offline")
+        c.eq(preg.list_plugins(fetcher=_fetch_boom)["plugins"], [],
+             "registry: offline fetch degrades to empty list")
+
+        # --- search history (schema v7) ---
+        c.eq(shist.MAX_ROWS, 200, "search-history: cap is 200")
+        shist.clear(conn62)
+        shist.record_search(conn62, "parser bug", kind="user", result_count=3, now=1_700_000_000)
+        shist.record_search(conn62, "  ", result_count=0, now=1_700_000_100)  # blank ignored
+        shist.record_search(conn62, "index race", result_count=1, now=1_700_000_200)
+        rec = shist.recent(conn62, 10)
+        c.eq(len(rec), 2, "search-history: blank query not recorded")
+        c.eq(rec[0]["query"], "index race", "search-history: newest first")
+        c.eq(rec[0]["result_count"], 1, "search-history: result_count stored")
+        c.eq(rec[1]["kind"], "user", "search-history: kind stored")
+        # prune at the cap
+        for _i in range(205):
+            shist.record_search(conn62, f"q{_i}", result_count=_i, now=1_700_001_000 + _i)
+        capn = conn62.execute("SELECT COUNT(*) n FROM search_history").fetchone()["n"]
+        c.ok(capn <= shist.MAX_ROWS, "search-history: pruned to the cap on insert")
+        hp = shist.history_payload(conn62, {"limit": 5})
+        c.eq(len(hp["history"]), 5, "search-history: payload honours limit")
+        # delete one + clear
+        one = shist.recent(conn62, 1)[0]
+        c.ok(shist.delete_one(conn62, one["id"])["deleted"], "search-history: delete one")
+        c.ok(not shist.delete_one(conn62, 99999999)["deleted"], "search-history: delete missing id graceful")
+        c.ok(shist.clear(conn62)["cleared"] and shist.recent(conn62) == [],
+             "search-history: clear empties it")
+        # api wrappers
+        api.record_search(conn62, "via api", result_count=2)
+        c.eq(api.search_history_payload(conn62)["history"][0]["query"], "via api",
+             "search-history: api.record_search + payload round-trip")
+
+        # --- tool-chain visualizer ---
+        tc = tchains.extract_chains(conn62, days=36500, limit=10)
+        c.ok(len(tc["chains"]) >= 1, "tool-chains: extracts chains from the corpus")
+        ch0 = tc["chains"][0]
+        c.ok({"tools", "label", "count", "sessions", "avg_cost"} <= set(ch0),
+             "tool-chains: chain has tools/count/avg_cost")
+        c.ok(len(ch0["tools"]) >= 2 and ch0["count"] >= 1, "tool-chains: chains are 2+ tools")
+        c.ok(" → " in ch0["label"], "tool-chains: label joins tools with an arrow")
+        # ranked by frequency
+        c.ok(all(tc["chains"][i]["count"] >= tc["chains"][i + 1]["count"]
+                 for i in range(len(tc["chains"]) - 1)), "tool-chains: ranked by frequency")
+        flow = tchains.tool_flow(tc)
+        c.ok("columns" in flow and "links" in flow, "tool-chains: flow has columns + links")
+        svg = tchains.chain_svg(tc)
+        c.ok(svg.startswith("<?xml") and "<svg" in svg and "</svg>" in svg,
+             "tool-chains: SVG is well-formed")
+        c.ok("viewBox" in svg, "tool-chains: SVG has a viewBox")
+        # empty index → graceful empty svg
+        with tempfile.TemporaryDirectory() as ectmp:
+            ecconn = index.connect(os.path.join(ectmp, "ec.db"))
+            ectc = tchains.extract_chains(ecconn, days=36500)
+            c.eq(ectc["chains"], [], "tool-chains: empty index yields no chains")
+            c.ok("<svg" in tchains.chain_svg(ectc), "tool-chains: empty index still renders an SVG")
+            ecconn.close()
+        # project filter narrows the set (or stays empty)
+        tc_proj = tchains.extract_chains(conn62, days=36500, project="does-not-exist")
+        c.eq(tc_proj["chains"], [], "tool-chains: unknown project filter -> empty")
+
+        # --- session templates ---
+        tlist = tplmod.list_templates()
+        names = {t["name"] for t in tlist}
+        c.ok({"refactor", "debug", "new-feature", "review"} <= names,
+             "templates: four built-ins present")
+        c.ok(all(t["source"] == "builtin" for t in tlist), "templates: built-ins flagged builtin")
+        rt = tplmod.get_template("refactor")
+        c.ok("auto-context" not in tplmod.template_vars(rt["body"]),
+             "templates: auto-context excluded from user vars")
+        c.ok("file" in rt["body"] and "goal" in rt["body"], "templates: refactor has file+goal")
+        rend = tplmod.render(conn62, "refactor", {"file": "auth.py", "goal": "async"})
+        c.ok("auth.py" in rend["rendered"] and "async" in rend["rendered"],
+             "templates: render fills the blanks")
+        c.ok("{auto-context}" not in rend["rendered"], "templates: auto-context placeholder filled")
+        c.eq(rend["missing"], [], "templates: no missing vars when all provided")
+        miss = tplmod.render(conn62, "refactor", {"file": "a.py"})
+        c.ok("goal" in miss["missing"], "templates: unfilled var reported as missing")
+        c.ok("{goal}" in miss["rendered"], "templates: unfilled placeholder kept verbatim")
+        ac = tplmod.auto_context(conn62)
+        c.ok(isinstance(ac, str) and ac, "templates: auto_context returns a non-empty string")
+        c.ok(tplmod.render(conn62, "no-such").get("error"), "templates: unknown template errors")
+        # render without context leaves the placeholder
+        nc = tplmod.render(conn62, "refactor", {"file": "a.py", "goal": "x"}, include_context=False)
+        c.ok("{auto-context}" in nc["rendered"], "templates: include_context=False keeps placeholder")
+        # create in a temp user dir + name safety
+        with tempfile.TemporaryDirectory() as udir:
+            cr = tplmod.create_template("mine", user_dir=udir)
+            c.ok(os.path.isfile(cr["path"]), "templates: create writes a user template")
+            c.ok(any(t["name"] == "mine" and t["source"] == "user"
+                     for t in tplmod.list_templates(user_dir=udir)),
+                 "templates: user template discovered + flagged user")
+            _raised = False
+            try:
+                tplmod.create_template("../evil", user_dir=udir)
+            except ValueError:
+                _raised = True
+            c.ok(_raised, "templates: create rejects a path-separator name")
+
+        # --- github-action summary ---
+        md = ghact.summarize_path(kexp["path"])
+        c.ok(md.startswith("### "), "github-action: markdown starts with a heading")
+        c.ok("| Cost |" in md and "| Health |" in md, "github-action: has cost + health rows")
+        c.ok("Tool success" in md, "github-action: reports tool success rate")
+        c.ok("ClaudeStudio" in md, "github-action: footer credits ClaudeStudio")
+        kps2 = parser.parse_session(kexp["path"])
+        c.ok(ghact.summarize_session(kps2).strip().endswith("</sub>"),
+             "github-action: ends with the sub footer")
+        miss_md = ghact.summarize_path(os.path.join(tmp62, "does-not-exist.jsonl"))
+        c.ok("No readable session" in miss_md, "github-action: missing file degrades gracefully")
+        c.ok("| Tokens |" in md and "| Messages |" in md, "github-action: tokens + messages rows")
+        c.ok("First prompt" in md, "github-action: surfaces the first prompt")
+
+        # --- extra coverage to harden the v0.6.3 surface ---
+        # search-history: record returns a recorded flag; kind normalisation
+        c.eq(shist.record_search(conn62, "", now=1)["recorded"], False,
+             "search-history: blank record reports not recorded")
+        shist.clear(conn62)
+        shist.record_search(conn62, "k", kind="bogus", now=2)
+        c.ok(shist.recent(conn62, 1)[0]["kind"] is None,
+             "search-history: invalid kind normalised to NULL")
+        shist.clear(conn62)
+        # tool-chains: svg renders nodes for a populated chain set
+        c.ok(svg.count("<rect") >= 1, "tool-chains: SVG draws node rectangles")
+        c.ok(tc["days"] == 36500, "tool-chains: echoes the day window")
+        c.ok(all(isinstance(ch["sessions"], int) for ch in tc["chains"]),
+             "tool-chains: session counts are ints")
+        # templates: title + per-template var lists
+        _tl = {t["name"]: t for t in tlist}
+        c.ok("file" in _tl["refactor"]["vars"] and "goal" in _tl["refactor"]["vars"],
+             "templates: refactor exposes file+goal vars")
+        c.ok("error" in _tl["debug"]["vars"], "templates: debug exposes the error var")
+        c.ok("feature" in _tl["new-feature"]["vars"], "templates: new-feature exposes feature var")
+        c.ok(_tl["refactor"]["title"], "templates: each template has a title line")
+        # auto_context scoped to a known project stays grounded
+        _pj = conn62.execute("SELECT project_name FROM sessions LIMIT 1").fetchone()["project_name"]
+        _acp = tplmod.auto_context(conn62, _pj)
+        c.ok(_pj in _acp, "templates: project-scoped auto_context names the project")
+        # onboarding: budget_set flips once a budget exists
+        c.eq(onb.onboarding_status(conn62)["budget_set"], False, "onboarding: no budget yet")
+        budgetmod.set_budget(conn62, "monthly", 25.0)
+        c.eq(onb.onboarding_status(conn62)["budget_set"], True, "onboarding: budget_set detects a ceiling")
+        budgetmod.clear_budget(conn62)
+        # plugin registry: fetch_registry validates the JSON shape
+        c.eq(preg.fetch_registry(fetcher=lambda u: b'{"version":1,"plugins":[]}')["plugins"], [],
+             "registry: fetch parses a valid registry")
+        _raised = False
+        try:
+            preg.fetch_registry(fetcher=lambda u: b'{"not":"a registry"}')
+        except preg.RegistryError:
+            _raised = True
+        c.ok(_raised, "registry: fetch rejects JSON without a plugins list")
+        c.ok(preg.list_plugins({"version": 1, "plugins": []})["version"] == 1,
+             "registry: list echoes the registry version")
+
+        # --- MCP tools #27-30 ---
+        c.eq(len(mcpmod.TOOLS), 30, "mcp: exactly 30 tools")
+        _new63 = {"get_onboarding_status", "list_registry_plugins",
+                  "get_plugin_info", "get_search_history"}
+        c.ok(_new63 <= {t["name"] for t in mcpmod.TOOLS}, "mcp: the 4 new v0.6.3 tools registered")
+        _o, _eo = _mcp62("get_onboarding_status", {})
+        c.ok(not _eo and "sessions_indexed" in _o, "mcp: get_onboarding_status returns the signals")
+        _sh, _esh = _mcp62("get_search_history", {"limit": 5})
+        c.ok(not _esh and "history" in _sh, "mcp: get_search_history returns history")
+        _rp, _erp = _mcp62("list_registry_plugins", {})
+        c.ok(not _erp and "plugins" in _rp, "mcp: list_registry_plugins returns a plugins list")
+        _pi, _epi = _mcp62("get_plugin_info", {"name": "definitely-not-real"})
+        c.ok(_epi and "error" in _pi, "mcp: get_plugin_info errors on unknown plugin")
 
         conn62.close()
 
@@ -1898,6 +2187,54 @@ def run() -> int:
     c.ok("function forecastCard(" in app_js and ".forecast-card" in css,
          "app.js: budget forecast card present + styled")
     c.ok("addEventListener('cs:action'" in app_js, "app.js: R/C/X intents wired to cs:action")
+
+    # --- v0.6.3 web wiring (Community & Clarity) ---------------------------
+    with open(os.path.join(web_dir, "index.html"), encoding="utf-8") as fh:
+        index_html = fh.read()
+    # PWA / mobile meta tags
+    c.ok('name="mobile-web-app-capable"' in index_html, "index.html: mobile-web-app-capable meta")
+    c.ok('name="apple-mobile-web-app-capable"' in index_html, "index.html: apple-mobile-web-app-capable meta")
+    c.ok('name="viewport"' in index_html and "width=device-width" in index_html,
+         "index.html: responsive viewport meta")
+    # bottom nav + tour script
+    c.ok('id="bottom-nav"' in index_html, "index.html: mobile bottom-nav host present")
+    c.ok('src="tour.js"' in index_html, "index.html: tour.js loaded")
+    # responsive CSS
+    c.ok("@media (max-width: 768px)" in css, "css: mobile breakpoint (<=768px)")
+    c.ok("min-width: 769px" in css, "css: tablet breakpoint (769-1024px)")
+    c.ok(".bottom-nav" in css and ".bn-item" in css, "css: bottom nav styled")
+    c.ok(".sidebar { display: none; }" in css, "css: sidebar collapses on mobile")
+    c.ok("min-height: 44px" in css, "css: 44px touch targets")
+    # first-run tour (tour.js)
+    tour_js = ""
+    with open(os.path.join(web_dir, "tour.js"), encoding="utf-8") as fh:
+        tour_js = fh.read()
+    c.ok("/api/onboarding/status" in tour_js, "tour.js: reads onboarding status")
+    c.ok("/api/onboarding/tour" in tour_js, "tour.js: fetches tour steps")
+    c.ok("tour_completed" in tour_js, "tour.js: records completion via preferences")
+    c.ok("tour=1" in tour_js, "tour.js: ?tour=1 replays the tour")
+    c.ok(".tour-overlay" in css and ".tour-spotlight" in css, "css: tour overlay + spotlight styled")
+    # persistent search history in the palette
+    c.ok("function cmdkHistoryItem(" in app_js, "app.js: search-history palette items")
+    c.ok("searchHistory:" in app_js and "clearSearchHistory:" in app_js,
+         "app.js: search-history API methods wired")
+    c.ok("type: 'history'" in app_js, "app.js: history items are a distinct cmdk type")
+    c.ok("e.key === 'Delete'" in app_js, "app.js: Delete removes a history entry")
+    c.ok(".cmdk-history" in css and ".cmdk-clear" in css, "css: search-history items styled")
+    # tool-chain visualizer
+    c.ok("function toolChainsCard(" in app_js and "/api/tool-chains" in app_js,
+         "app.js: tool-chain card fetches the API")
+    c.ok(".tool-chains-card" in css and ".tc-row" in css, "css: tool-chain card styled")
+    # session template picker (N) + search history shortcut (H)
+    c.ok("function openTemplatePicker(" in app_js, "app.js: template picker present")
+    c.ok("/api/templates" in app_js and "renderTemplate:" in app_js,
+         "app.js: template API wired")
+    c.ok(".cs-template-panel" in css and ".cs-template-pick" in css, "css: template picker styled")
+    c.ok("e.key === 'N'" in app_js and "e.key === 'H'" in app_js,
+         "app.js: N opens templates, H opens search history")
+    # mobile bottom nav rendering
+    c.ok("function renderBottomNav(" in app_js and "BOTTOM_NAV" in app_js,
+         "app.js: bottom nav rendered")
 
     # --- v0.5.1 web wiring -------------------------------------------------
     with open(os.path.join(web_dir, "index.html"), encoding="utf-8") as fh:

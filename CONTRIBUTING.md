@@ -78,11 +78,38 @@ Python versions — keep it green.
 
 ```bash
 python -m claudestudio --selftest
-# Expected: ALLPASS  (≥ 620 checks)
+# Expected: ALLPASS  (≥ 850 checks)
 ```
 
-As of v0.6.1 the self-test runs **623** assertions; new modules each add ≥ 8.
+As of v0.6.3 the self-test runs **858** assertions; new modules each add ≥ 8.
 Never remove or weaken an existing assertion.
+
+## The pipeline, end to end
+
+The data flows in one direction, which is why each stage stays testable in
+isolation:
+
+```
+~/.claude/projects/**/*.jsonl  →  parser.py  →  index.py (SQLite + FTS5)
+                                                     ↓
+        cli.py  ←  api.py (pure handlers)  ←  index.db
+                       ↓                ↓
+                  server.py          mcp.py
+                       ↓                ↓
+                    web/            Claude Code
+```
+
+`parser.py` normalises the wire format; `index.py` builds the denormalised
+SQLite index (with an in-place migration runner — bump `SCHEMA_VERSION` and add
+a forward, never-dropping migration); `api.py` holds HTTP-agnostic handlers (what
+the self-test exercises); `server.py` and `cli.py` are thin transports; `mcp.py`
+exposes the same reads to Claude Code over JSON-RPC.
+
+### Adding an MCP tool
+
+Add a `_t_<name>(conn, args)` handler in `mcp.py`, append a tool dict to `TOOLS`
+(name, description, `inputSchema`, handler), and pin it in the self-test (the
+`mcp: exactly N tools` count plus a round-trip call). Tools are read-only.
 
 ## Writing plugins
 
@@ -90,8 +117,9 @@ Want to extend ClaudeStudio without forking it? Drop a `.py` file in
 `~/.claudestudio/plugins/` that defines one of the documented hooks
 (`register_routes`, `register_mcp_tools`, `register_cli_commands`,
 `on_session_indexed`). See **[docs/PLUGINS.md](docs/PLUGINS.md)** for the full
-developer guide, two worked examples, and the security model. Plugins are
-localhost-only and run at your own trust level — review before you install.
+developer guide, and **[docs/PLUGIN_REGISTRY.md](docs/PLUGIN_REGISTRY.md)** for
+publishing to the community registry. Plugins are localhost-only and run at your
+own trust level — review before you install.
 
 ## Style
 

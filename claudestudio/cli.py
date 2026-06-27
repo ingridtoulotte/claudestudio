@@ -1323,6 +1323,221 @@ def cmd_webhook(args):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# v0.6.3 — Community & Clarity
+# ---------------------------------------------------------------------------
+
+def cmd_tour(args):
+    """Print the first-run guided tour as plain text (no curses)."""
+    from . import onboarding
+    print(onboarding.terminal_tour(), end="")
+    return 0
+
+
+def cmd_plugins(args):
+    """Discover and install community plugins from the curated registry."""
+    from . import plugin_registry as pr
+    action = getattr(args, "action", None) or "list"
+
+    if action == "update":
+        try:
+            reg = pr.fetch_registry()
+        except pr.RegistryError as exc:
+            print(f"  ✗ {exc}", file=sys.stderr)
+            return 1
+        print(f"  ✓ registry refreshed — {len(reg.get('plugins', []))} plugins cached")
+        return 0
+
+    if action == "list":
+        data = pr.list_plugins()
+        print(BANNER)
+        plugins = data.get("plugins", [])
+        if not plugins:
+            print("  No plugins cached yet. Run `claudestudio plugins update` "
+                  "to fetch the registry.")
+            return 0
+        print(f"  {len(plugins)} plugin(s) in the registry:\n")
+        for p in plugins:
+            mark = "●" if p["installed"] else "○"
+            tags = ("  [" + ", ".join(p.get("tags", [])) + "]") if p.get("tags") else ""
+            print(f"   {mark} {p['name']:<16} {p.get('description', '')[:52]}{tags}")
+        print("\n   ● installed   ○ available · "
+              "install with `claudestudio plugins install <name>`")
+        return 0
+
+    if action == "info":
+        if not args.name:
+            print("  Usage: claudestudio plugins info <name>", file=sys.stderr)
+            return 1
+        info = pr.plugin_info(args.name)
+        if info.get("error"):
+            print(f"  ✗ {info['error']}", file=sys.stderr)
+            return 1
+        print(BANNER)
+        print(f"  {info.get('name')}  v{info.get('version', '?')}  "
+              f"by {info.get('author', 'community')}")
+        print(f"  {info.get('description', '')}")
+        print(f"  tags : {', '.join(info.get('tags', [])) or '—'}")
+        print(f"  url  : {info.get('url', '')}")
+        print(f"  state: {'installed' if info.get('installed') else 'not installed'}")
+        return 0
+
+    if action == "remove":
+        if not args.name:
+            print("  Usage: claudestudio plugins remove <name>", file=sys.stderr)
+            return 1
+        res = pr.remove_plugin(args.name)
+        if res["status"] == "removed":
+            print(f"  ✓ removed {args.name}")
+            return 0
+        print(f"  (no installed plugin named {args.name!r})")
+        return 1
+
+    if action == "install":
+        if not args.name:
+            print("  Usage: claudestudio plugins install <name>", file=sys.stderr)
+            return 1
+
+        def _confirm(url: str) -> bool:
+            try:
+                ans = input(f"  Download plugin source from\n    {url}\n  Proceed? [y/N] ")
+            except EOFError:
+                return False
+            return ans.strip().lower() in ("y", "yes")
+
+        try:
+            res = pr.install_plugin(args.name, yes=args.yes, confirm=_confirm)
+        except pr.RegistryError as exc:
+            print(f"  ✗ {exc}", file=sys.stderr)
+            return 1
+        status = res.get("status")
+        if status == "installed":
+            vf = " (checksum verified)" if res.get("verified") else ""
+            print(f"  ✓ installed {args.name} → {res['path']}{vf}")
+            return 0
+        if status == "already_installed":
+            print(f"  {args.name} is already installed ({res['path']}).")
+            return 0
+        if status == "cancelled":
+            print("  Cancelled.")
+            return 1
+        print(f"  ✗ {status}", file=sys.stderr)
+        return 1
+
+    print(f"  Unknown action: {action}", file=sys.stderr)
+    return 1
+
+
+def cmd_search_history(args):
+    """List (or clear) the persistent search history."""
+    from . import search_history
+    conn = index.connect(args.db)
+    try:
+        if args.clear:
+            search_history.clear(conn)
+            print("  ✓ search history cleared")
+            return 0
+        items = search_history.recent(conn, args.limit)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(items, indent=2, default=str))
+        return 0
+    print(BANNER)
+    if not items:
+        print("  No searches recorded yet.")
+        return 0
+    print(f"  {len(items)} recent search(es):\n")
+    for it in items:
+        kind = f" [{it['kind']}]" if it.get("kind") else ""
+        print(f"   {_fmt_day(it['searched_at']):<12} "
+              f"{(it['query'] or '')[:44]:<44}{kind}  · {it.get('result_count', 0)} hits")
+    return 0
+
+
+def cmd_github_summary(args):
+    """Print a Markdown session summary for use in GitHub Actions."""
+    from . import github_action
+    path = args.session
+    if not path and args.last:
+        conn = index.connect(args.db)
+        try:
+            row = conn.execute(
+                "SELECT file_path FROM sessions ORDER BY last_epoch DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row or not row["file_path"]:
+            print("_No indexed sessions to summarize._")
+            return 1
+        path = row["file_path"]
+    if not path:
+        print("  Pass --session <path> or --last", file=sys.stderr)
+        return 1
+    print(github_action.summarize_path(path), end="")
+    return 0
+
+
+def cmd_template(args):
+    """List, render, or create session templates."""
+    from . import templates
+    action = getattr(args, "action", None) or "list"
+
+    if action == "list":
+        items = templates.list_templates()
+        print(BANNER)
+        print(f"  {len(items)} template(s):\n")
+        for t in items:
+            v = ("  {" + ", ".join(t["vars"]) + "}") if t["vars"] else ""
+            print(f"   {t['name']:<14} [{t['source']}]{v}")
+        print("\n   render one:  claudestudio template use <name> --file … --goal …")
+        return 0
+
+    if action == "create":
+        if not args.name:
+            print("  Usage: claudestudio template create <name>", file=sys.stderr)
+            return 1
+        try:
+            res = templates.create_template(args.name)
+        except ValueError as exc:
+            print(f"  ✗ {exc}", file=sys.stderr)
+            return 1
+        print(f"  ✓ template at {res['path']} — edit it in your $EDITOR")
+        return 0
+
+    if action == "use":
+        if not args.name:
+            print("  Usage: claudestudio template use <name> [--file …] [--goal …]",
+                  file=sys.stderr)
+            return 1
+        variables: dict = {}
+        for k in ("file", "goal", "error", "project", "feature"):
+            v = getattr(args, k, None)
+            if v:
+                variables[k] = v
+        for kv in (args.var or []):
+            if "=" in kv:
+                key, val = kv.split("=", 1)
+                variables[key.strip()] = val
+        conn = index.connect(args.db)
+        try:
+            out = templates.render(conn, args.name, variables,
+                                   include_context=not args.no_context)
+        finally:
+            conn.close()
+        if out.get("error"):
+            print(f"  ✗ {out['error']}", file=sys.stderr)
+            return 1
+        print(out["rendered"])
+        if out.get("missing"):
+            print(f"\n  ⚠  unfilled: {{{', '.join(out['missing'])}}} "
+                  f"— pass them with --var key=value", file=sys.stderr)
+        return 0
+
+    print(f"  Unknown action: {action}", file=sys.stderr)
+    return 1
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="claudestudio",
@@ -1609,6 +1824,54 @@ def build_parser():
                    help="remove a webhook by URL or id")
     p.add_argument("--list", action="store_true", help="list webhooks (default)")
     p.set_defaults(func=cmd_webhook)
+
+    # --- v0.6.3: Community & Clarity ---
+    p = sub.add_parser("tour", help="print the first-run guided tour (plain text)")
+    p.set_defaults(func=cmd_tour)
+
+    p = sub.add_parser("plugins", help="discover & install community plugins from the registry")
+    _add_common(p)
+    p.add_argument("action", nargs="?", default="list",
+                   choices=["list", "install", "remove", "info", "update"],
+                   help="list (default) | install | remove | info | update")
+    p.add_argument("name", nargs="?", default=None,
+                   help="plugin name (for install/remove/info)")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the download confirmation (for CI)")
+    p.set_defaults(func=cmd_plugins)
+
+    p = sub.add_parser("search-history", help="show (or clear) your recent searches")
+    _add_common(p)
+    p.add_argument("--limit", type=int, default=10, help="how many to show (default 10)")
+    p.add_argument("--clear", action="store_true", help="delete all history")
+    p.add_argument("--json", action="store_true", help="emit raw JSON for scripting")
+    p.set_defaults(func=cmd_search_history)
+
+    p = sub.add_parser("github-summary",
+                       help="print a Markdown session summary (for GitHub Actions)")
+    _add_common(p)
+    p.add_argument("--session", default=None, metavar="PATH",
+                   help="path to a Claude Code session JSONL")
+    p.add_argument("--last", action="store_true",
+                   help="use the most recent indexed session")
+    p.set_defaults(func=cmd_github_summary)
+
+    p = sub.add_parser("template", help="session starter templates with auto-context")
+    _add_common(p)
+    p.add_argument("action", nargs="?", default="list",
+                   choices=["list", "use", "create"],
+                   help="list (default) | use | create")
+    p.add_argument("name", nargs="?", default=None, help="template name")
+    p.add_argument("--file", default=None, help="value for {file}")
+    p.add_argument("--goal", default=None, help="value for {goal}")
+    p.add_argument("--error", default=None, help="value for {error}")
+    p.add_argument("--project", default=None, help="value for {project}")
+    p.add_argument("--feature", default=None, help="value for {feature}")
+    p.add_argument("--var", action="append", metavar="KEY=VALUE",
+                   help="set any template variable (repeatable)")
+    p.add_argument("--no-context", action="store_true",
+                   help="don't fill {auto-context} from history")
+    p.set_defaults(func=cmd_template)
 
     return ap
 

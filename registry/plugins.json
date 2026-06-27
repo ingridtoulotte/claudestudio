@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "updated": "2026-06-27",
+  "plugins": [
+    {
+      "name": "slack_notify",
+      "description": "Post a one-line session summary to a Slack Incoming Webhook when a session finishes indexing.",
+      "author": "community",
+      "url": "https://raw.githubusercontent.com/ingridtoulotte/claudestudio/main/registry/plugins/slack_notify.py",
+      "version": "1.0.0",
+      "tags": ["notifications", "slack"],
+      "sha256": "a67ff3b0436d18b7d446b68796c594d16de66ee3f17c1976f67f6fb4cdd9d216"
+    },
+    {
+      "name": "github_status",
+      "description": "Set a GitHub commit status when a session runs against a git repository (token + repo from env vars).",
+      "author": "community",
+      "url": "https://raw.githubusercontent.com/ingridtoulotte/claudestudio/main/registry/plugins/github_status.py",
+      "version": "1.0.0",
+      "tags": ["github", "ci", "notifications"],
+      "sha256": "034682c614243fb83fe214045f084fb1c3c4dacd695d52ed3db8c5ac73e939d2"
+    },
+    {
+      "name": "ascii_report",
+      "description": "Adds GET /api/ascii-report — a compact ASCII table of today's sessions.",
+      "author": "community",
+      "url": "https://raw.githubusercontent.com/ingridtoulotte/claudestudio/main/registry/plugins/ascii_report.py",
+      "version": "1.0.0",
+      "tags": ["reporting", "terminal"],
+      "sha256": "071cea3c84cf49ff68ad6a193be187146daacdbc6f33c9128fa2df372f901635"
+    }
+  ]
+}

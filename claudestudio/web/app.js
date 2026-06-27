@@ -1582,19 +1582,49 @@ function openCmdk() {
 function closeCmdk() { CMDK.open = false; $('#cmdk').hidden = true; }
 let cmdkTimer;
 async function cmdkRender(q) {
+  // Search history: when the input is empty, surface the last 10 searches as
+  // one-tap suggestions above everything else (most recent first). v0.6.3.
+  let history = [];
+  if (!q) {
+    try {
+      const r = await API.searchHistory(10);
+      history = (r.history || []).map((h) => ({ type: 'history', id: h.id, label: h.query, count: h.result_count, when: h.searched_at, icon: '↺' }));
+    } catch { /* ignore */ }
+  }
   const navCmds = NAV.filter((n) => !q || n.label.toLowerCase().includes(q.toLowerCase())).map((n) => ({ type: 'nav', label: 'Go to ' + n.label, route: n.id, icon: '→' }));
   let results = [];
   if (q && q.length >= 2) {
     try { const r = await API.search(q, 18); results = r.results.map((x) => ({ type: 'result', label: x.title || 'Untitled', snip: x.snip, session: x.session_id, seq: x.seq, project: x.project_name, q, icon: '◷' })); } catch { /* ignore */ }
   }
-  CMDK.items = [...navCmds, ...results];
+  CMDK.items = [...history, ...navCmds, ...results];
   CMDK.sel = 0;
   const box = $('#cmdk-results'); box.innerHTML = '';
-  if (navCmds.length) { box.appendChild(el('div', { class: 'cmdk-group', text: 'Navigate' })); navCmds.forEach((it, i) => box.appendChild(cmdkItem(it, i))); }
-  if (results.length) { box.appendChild(el('div', { class: 'cmdk-group', text: 'Sessions' })); results.forEach((it, i) => box.appendChild(cmdkItem(it, navCmds.length + i))); }
+  if (history.length) {
+    const grp = el('div', { class: 'cmdk-group cmdk-group-row' }, [
+      el('span', { text: 'Recent searches' }),
+      el('button', { class: 'cmdk-clear', title: 'Clear search history', onclick: async (e) => { e.stopPropagation(); await API.clearSearchHistory(); cmdkRender(''); } }, ['Clear history']),
+    ]);
+    box.appendChild(grp);
+    history.forEach((it, i) => box.appendChild(cmdkHistoryItem(it, i)));
+  }
+  if (navCmds.length) { box.appendChild(el('div', { class: 'cmdk-group', text: 'Navigate' })); navCmds.forEach((it, i) => box.appendChild(cmdkItem(it, history.length + i))); }
+  if (results.length) { box.appendChild(el('div', { class: 'cmdk-group', text: 'Sessions' })); results.forEach((it, i) => box.appendChild(cmdkItem(it, history.length + navCmds.length + i))); }
   if (q && q.length >= 2) box.appendChild(el('div', { class: 'cmdk-item', onclick: () => { closeCmdk(); go('search', { q }); } }, [el('span', { class: 'ico', text: '⏎' }), el('div', { class: 't' }, [el('div', { class: 'main', html: `See all results for <b>${esc(q)}</b>` })])]));
   if (!CMDK.items.length && (!q || q.length < 2)) box.appendChild(el('div', { class: 'empty', style: 'padding:30px', text: 'Type to search your sessions…' }));
   updateSel();
+}
+
+// One recent-search suggestion: query text, last result count, relative time,
+// and a delete button (also reachable with the Delete key while selected).
+function cmdkHistoryItem(it, i) {
+  return el('div', { class: 'cmdk-item cmdk-history', 'data-i': i, onclick: () => runCmdk(it) }, [
+    el('span', { class: 'ico', text: it.icon }),
+    el('div', { class: 't' }, [
+      el('div', { class: 'main', text: it.label }),
+      el('div', { class: 'snip', text: `${fmt.num(it.count || 0)} results · ${fmt.rel(it.when)}` }),
+    ]),
+    el('button', { class: 'cmdk-del', title: 'Remove from history', onclick: async (e) => { e.stopPropagation(); await API.delSearchHistory(it.id); cmdkRender(''); } }, ['×']),
+  ]);
 }
 function cmdkItem(it, i) {
   const snip = it.snip ? esc(it.snip).replace(/⟦/g, '<mark>').replace(/⟧/g, '</mark>') : (it.project || '');
@@ -1607,6 +1637,7 @@ function updateSel() { $$('#cmdk-results .cmdk-item').forEach((n) => n.classList
 function runCmdk(it) {
   closeCmdk();
   if (it.type === 'nav') return go(it.route);
+  if (it.type === 'history') return go('search', { q: it.label });
   if (it.type === 'result') {
     const p = {};
     if (it.seq != null) p.seq = it.seq;
@@ -2069,6 +2100,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown') { e.preventDefault(); CMDK.sel = Math.min(CMDK.items.length - 1, CMDK.sel + 1); updateSel(); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); CMDK.sel = Math.max(0, CMDK.sel - 1); updateSel(); }
   else if (e.key === 'Enter') { const it = CMDK.items[CMDK.sel]; if (it) runCmdk(it); else { const q = $('#cmdk-input').value; if (q) { closeCmdk(); go('search', { q }); } } }
+  else if (e.key === 'Delete') { const it = CMDK.items[CMDK.sel]; if (it && it.type === 'history') { e.preventDefault(); API.delSearchHistory(it.id).then(() => cmdkRender('')); } }
 });
 
 (async function boot() {
@@ -2258,4 +2290,150 @@ document.addEventListener('cs:action', (e) => {
   if (intent === 'resume') resumeCurrentSession();
   else if (intent === 'compare') openCompareModal(CURRENT_SESSION);
   else if (intent === 'trace') toggleTraceTab(0);
+});
+
+// ===========================================================================
+// v0.6.3 — Community & Clarity UI: mobile bottom nav, persistent search history
+// (in the palette, above), the tool-chain visualizer, and the session-template
+// picker (keyboard N). Search history shortcut is H. Self-contained; uses the
+// shared `el` / `copyText` helpers.
+// ===========================================================================
+
+Object.assign(API, {
+  searchHistory: (limit = 10) => API.get('/api/search/history?limit=' + limit),
+  clearSearchHistory: () => fetch('/api/search/history', { method: 'DELETE' }).then((r) => r.json()),
+  delSearchHistory: (id) => fetch('/api/search/history/' + encodeURIComponent(id), { method: 'DELETE' }).then((r) => r.json()),
+  toolChains: (days = 30) => API.get('/api/tool-chains?days=' + days),
+  toolChainsSvgUrl: (days = 30) => '/api/tool-chains/svg?days=' + days,
+  templates: () => API.get('/api/templates'),
+  template: (name) => API.get('/api/templates/' + encodeURIComponent(name)),
+  renderTemplate: (name, vars) => API.post('/api/templates/' + encodeURIComponent(name) + '/render', { vars }),
+  onboardingStatus: () => API.get('/api/onboarding/status'),
+});
+
+// ---- mobile bottom navigation (≤768px) ------------------------------------
+const BOTTOM_NAV = [
+  { id: 'sessions', label: 'Sessions', icon: 'M4 6h16M4 12h16M4 18h10', action: () => go('sessions') },
+  { id: 'search', label: 'Search', icon: 'M21 21l-4.3-4.3M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z', action: () => openCmdk() },
+  { id: 'analytics', label: 'Analytics', icon: 'M4 19V5M4 19h16M8 16v-5M13 16V8M18 16v-9', action: () => go('analytics') },
+  { id: 'prompts', label: 'Prompts', icon: 'M4 5h16M4 12h16M4 19h10M18 17l3 2-3 2', action: () => go('prompts') },
+  { id: 'settings', label: 'Settings', icon: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 3v2M12 19v2M5 12H3M21 12h-2', action: () => { const t = $('#theme-toggle'); if (t) t.click(); } },
+];
+function renderBottomNav() {
+  const host = $('#bottom-nav');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const item of BOTTOM_NAV) {
+    host.appendChild(el('button', { class: 'bn-item', 'data-route': item.id, 'aria-label': item.label, onclick: item.action }, [
+      el('span', { html: `<svg viewBox="0 0 24 24" width="22" height="22"><path d="${item.icon}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` }),
+      el('span', { class: 'bn-label', text: item.label }),
+    ]));
+  }
+}
+function highlightBottomNav(route) {
+  $$('.bn-item').forEach((n) => n.classList.toggle('active', n.dataset.route === route));
+}
+renderBottomNav();
+window.addEventListener('hashchange', () => {
+  const route = (location.hash.replace(/^#\/?/, '') || 'sessions').split('?')[0].split('/')[0];
+  highlightBottomNav(route === 'session' ? 'sessions' : route);
+});
+
+// ---- tool-chain visualizer (Feature 6) ------------------------------------
+// A Sankey-style SVG of the most common tool_A → tool_B → tool_C sequences, plus
+// a ranked table. Mounted by wrapping the Patterns view (reassignable binding).
+async function toolChainsCard(days = 90) {
+  const card = el('div', { class: 'tool-chains-card' });
+  card.appendChild(el('h2', { class: 'section-title', text: 'Tool chains' }));
+  card.appendChild(el('div', { class: 'page-sub', text: 'The sequences your tools run in, most frequent first.' }));
+  let data;
+  try { data = await API.toolChains(days); } catch { card.appendChild(el('div', { class: 'empty', text: 'No tool chains yet.' })); return card; }
+  const chains = (data && data.chains) || [];
+  if (!chains.length) { card.appendChild(el('div', { class: 'empty', text: 'No recurring tool chains in this window yet.' })); return card; }
+  // server-rendered Sankey SVG
+  card.appendChild(el('div', { class: 'tool-chains-svg' }, [
+    el('img', { src: API.toolChainsSvgUrl(days), alt: 'Tool chain flow diagram', loading: 'lazy' }),
+  ]));
+  const table = el('div', { class: 'tool-chains-list' });
+  chains.slice(0, 10).forEach((c, i) => {
+    table.appendChild(el('div', { class: 'tc-row' }, [
+      el('span', { class: 'tc-rank', text: '#' + (i + 1) }),
+      el('span', { class: 'tc-flow', text: c.label }),
+      el('span', { class: 'tc-meta', text: `×${fmt.num(c.count)} · ${fmt.cost(c.avg_cost)} avg` + (c.avg_health != null ? ` · health ${c.avg_health}` : '') }),
+    ]));
+  });
+  card.appendChild(table);
+  return card;
+}
+if (typeof viewPatterns === 'function') {
+  const _origViewPatterns = viewPatterns;
+  viewPatterns = async function () {
+    await _origViewPatterns.apply(this, arguments);
+    try {
+      const host = view().querySelector('.view-pad') || view();
+      host.appendChild(await toolChainsCard());
+    } catch (e) { /* card is additive — never break the view */ }
+  };
+}
+
+// ---- session template picker (Feature 7, keyboard N) ----------------------
+let _tplModal = null;
+function closeTemplatePicker() { if (_tplModal) { _tplModal.remove(); _tplModal = null; } }
+async function openTemplatePicker() {
+  closeTemplatePicker();
+  let list = [];
+  try { list = (await API.templates()).templates || []; } catch { toast('Could not load templates', 'err'); return; }
+  _tplModal = el('div', { class: 'cs-modal-backdrop cs-template-modal', onclick: (e) => { if (e.target === _tplModal) closeTemplatePicker(); } });
+  const panel = el('div', { class: 'cs-modal cs-template-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New session from template' });
+  panel.appendChild(el('div', { class: 'cs-modal-head' }, [
+    el('h3', { text: 'New session from a template' }),
+    el('button', { class: 'cs-modal-x', 'aria-label': 'Close', onclick: closeTemplatePicker }, ['×']),
+  ]));
+  const bodyEl = el('div', { class: 'cs-template-body' });
+  const pickWrap = el('div', { class: 'cs-template-list' });
+  list.forEach((t) => {
+    pickWrap.appendChild(el('button', { class: 'cs-template-pick', onclick: () => showTemplateForm(t, bodyEl) }, [
+      el('span', { class: 'main', text: t.name }),
+      el('span', { class: 'sub', text: t.vars.length ? '{' + t.vars.join(', ') + '}' : 'no fields' }),
+    ]));
+  });
+  bodyEl.appendChild(pickWrap);
+  panel.appendChild(bodyEl);
+  _tplModal.appendChild(panel);
+  document.body.appendChild(_tplModal);
+}
+function showTemplateForm(t, bodyEl) {
+  const form = el('div', { class: 'cs-template-form' });
+  form.appendChild(el('button', { class: 'cs-template-back', onclick: () => openTemplatePicker(), text: '← templates' }));
+  form.appendChild(el('h4', { text: t.name }));
+  const inputs = {};
+  t.vars.forEach((v) => {
+    const inp = el('input', { class: 'input', placeholder: v, 'data-var': v });
+    inputs[v] = inp;
+    form.appendChild(el('label', { class: 'cs-template-field' }, [el('span', { text: v }), inp]));
+  });
+  const out = el('textarea', { class: 'cs-template-out', readonly: 'readonly', rows: 7, 'aria-label': 'Rendered context block' });
+  const render = async () => {
+    const vars = {};
+    Object.entries(inputs).forEach(([k, inp]) => { if (inp.value) vars[k] = inp.value; });
+    try { const r = await API.renderTemplate(t.name, vars); out.value = r.rendered; } catch (e) { out.value = 'Error: ' + e.message; }
+  };
+  form.appendChild(el('div', { class: 'cs-template-actions' }, [
+    el('button', { class: 'btn-ghost', onclick: render, text: 'Preview' }),
+    el('button', { class: 'btn-primary', onclick: async () => { await render(); copyText(out.value); toast('Copied context to clipboard — paste into a new Claude Code window'); } }, ['Copy & start']),
+  ]));
+  form.appendChild(out);
+  bodyEl.innerHTML = '';
+  bodyEl.appendChild(form);
+  render();
+}
+
+// ---- keyboard: N (new session from template), H (search history) ----------
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+  if (CMDK.open || _tplModal) return;
+  if (e.key === 'N' || e.key === 'n') { e.preventDefault(); openTemplatePicker(); }
+  else if (e.key === 'H' || e.key === 'h') { e.preventDefault(); openCmdk(); }
 });

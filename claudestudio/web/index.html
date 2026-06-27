@@ -9,6 +9,9 @@
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#9a8cff" />
   <meta name="color-scheme" content="dark light" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="apple-touch-icon" href="assets/icon-192.svg" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -53,6 +56,9 @@
     <main class="main" id="view" role="main">
       <div class="loading"><div class="spinner"></div></div>
     </main>
+
+    <!-- Mobile bottom navigation (≤768px). Populated by app.js; hidden on desktop. -->
+    <nav class="bottom-nav" id="bottom-nav" role="navigation" aria-label="Mobile navigation"></nav>
   </div>
 
   <div class="cmdk-backdrop" id="cmdk" hidden>
@@ -71,5 +77,6 @@
   <script src="themes.js"></script>
   <script src="keyboard.js"></script>
   <script src="app.js"></script>
+  <script src="tour.js"></script>
 </body>
 </html>

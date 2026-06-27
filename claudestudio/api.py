@@ -1593,7 +1593,13 @@ def preferences_get(conn) -> dict:
 
 
 def preferences_set(conn, body: dict) -> dict:
-    """Persist preferences. A bad ``theme`` value raises 400. Returns stored set."""
+    """Persist preferences. A bad ``theme`` value raises 400. Returns stored set.
+
+    Only a fixed allowlist of keys is writable: ``theme`` (validated) and
+    ``tour_completed`` (v0.6.3 — the first-run guided tour records completion as
+    ``'1'`` here). Unknown keys are ignored rather than stored, so the preferences
+    table can't be turned into an arbitrary key/value sink by a POST.
+    """
     body = body or {}
     if "theme" in body:
         theme = str(body.get("theme") or "")
@@ -1601,6 +1607,9 @@ def preferences_set(conn, body: dict) -> dict:
             raise ApiError(400, f"invalid theme {theme!r}; "
                                 f"choose one of {', '.join(VALID_THEMES)}")
         index.set_preference(conn, "theme", theme)
+    if "tour_completed" in body:
+        done = "1" if body.get("tour_completed") in (1, "1", True, "true", "yes") else "0"
+        index.set_preference(conn, "tour_completed", done)
     return preferences_get(conn)
 
 
@@ -1686,3 +1695,113 @@ def webhooks_add(conn, body: dict) -> dict:
 def webhooks_remove(conn, webhook_id: str) -> dict:
     from . import webhooks
     return webhooks.remove_webhook(conn, webhook_id)
+
+
+# ===========================================================================
+# v0.6.3 — Community & Clarity: onboarding tour, plugin registry, search
+# history, tool-chain visualizer, session templates
+# ===========================================================================
+
+# --- onboarding / first-run tour -------------------------------------------
+
+def onboarding_status_payload(conn, db_path: str | None = None) -> dict:
+    """``{tour_completed, hook_installed, sessions_indexed, budget_set}``."""
+    from . import onboarding
+    return onboarding.onboarding_status(conn, db_path=db_path)
+
+
+def tour_payload(conn, db_path: str | None = None) -> dict:
+    """The tour steps plus the onboarding status, for the web overlay."""
+    from . import onboarding
+    return onboarding.tour_payload(conn, db_path=db_path)
+
+
+# --- plugin registry -------------------------------------------------------
+
+def plugins_registry_payload(conn=None, *, fetcher=None) -> dict:
+    """The cached plugin registry, annotated with installed status."""
+    from . import plugin_registry
+    return plugin_registry.list_plugins(fetcher=fetcher)
+
+
+def plugins_installed_payload(conn=None) -> dict:
+    """Names of plugins currently installed in the plugins dir."""
+    from . import plugin_registry
+    return {"installed": sorted(plugin_registry.installed_names())}
+
+
+def plugin_info_payload(conn, name: str, *, fetcher=None) -> dict:
+    from . import plugin_registry
+    info = plugin_registry.plugin_info(str(name), fetcher=fetcher)
+    if info.get("error"):
+        raise ApiError(404, info["error"])
+    return info
+
+
+# --- search history --------------------------------------------------------
+
+def search_history_payload(conn, params: dict | None = None) -> dict:
+    from . import search_history
+    return search_history.history_payload(conn, params or {})
+
+
+def clear_search_history(conn) -> dict:
+    from . import search_history
+    return search_history.clear(conn)
+
+
+def delete_search_history_one(conn, entry_id) -> dict:
+    from . import search_history
+    return search_history.delete_one(conn, entry_id)
+
+
+def record_search(conn, query: str, *, kind=None, project=None, result_count=0) -> dict:
+    """Append a search to the history (needs a writable connection)."""
+    from . import search_history
+    return search_history.record_search(
+        conn, query, kind=kind, project=project, result_count=result_count)
+
+
+# --- tool-chain visualizer -------------------------------------------------
+
+def tool_chains_payload(conn, params: dict | None = None) -> dict:
+    from . import tool_chains
+    p = params or {}
+    return tool_chains.extract_chains(
+        conn,
+        days=_int_param(p.get("days"), 30, lo=1, hi=3650),
+        project=(p.get("project") or "").strip() or None,
+        limit=_int_param(p.get("limit"), 10, lo=1, hi=100),
+    )
+
+
+def tool_chains_svg(conn, params: dict | None = None) -> str:
+    from . import tool_chains
+    return tool_chains.chain_svg(tool_chains_payload(conn, params))
+
+
+# --- session templates -----------------------------------------------------
+
+def templates_list(conn=None) -> dict:
+    from . import templates
+    return {"templates": templates.list_templates()}
+
+
+def template_get(conn, name: str) -> dict:
+    from . import templates
+    tpl = templates.get_template(str(name))
+    if tpl is None:
+        raise ApiError(404, f"no template named {name!r}")
+    return {"name": tpl["name"], "source": tpl["source"], "body": tpl["body"],
+            "vars": tpl["vars"]}
+
+
+def template_render(conn, name: str, body: dict | None = None) -> dict:
+    from . import templates
+    body = body or {}
+    variables = body.get("vars") if isinstance(body.get("vars"), dict) else {}
+    include_context = body.get("include_context", True)
+    out = templates.render(conn, str(name), variables, include_context=bool(include_context))
+    if out.get("error"):
+        raise ApiError(404, out["error"])
+    return out
